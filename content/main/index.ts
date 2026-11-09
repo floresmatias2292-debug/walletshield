@@ -10,7 +10,8 @@
  * Debe ser chico y no depender de nada que la página pueda alterar: guarda
  * referencias a las funciones nativas apenas arranca.
  */
-import { HANDSHAKE_KEY, parseIsoToMain, READONLY_RPC, safeClone, SENSITIVE_METHODS } from '../../shared/bridge';
+import { containsSensitiveRpc, HANDSHAKE_KEY, parseIsoToMain, READONLY_RPC, safeClone, SENSITIVE_METHODS, type ThreatKind } from '../../shared/bridge';
+import { findAddresses, sameAddress } from '../../shared/addresses';
 import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
 
 (() => {
@@ -39,7 +40,23 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
   const CustomEventC = CustomEvent;
   const stopImmediate = Event.prototype.stopImmediatePropagation;
 
+  const ErrorStack = (): string => new ErrorC().stack ?? '';
   const ACK_TIMEOUT_MS = 2500;
+
+  // URL de este mismo script, para distinguir en una pila de llamadas qué
+  // código es nuestro, qué es de otra extensión (la wallet) y qué de la página.
+  const OUR_URL = /(chrome-extension:\/\/[^/\s)]+\/[^:\s)]+)/.exec(ErrorStack())?.[1] ?? '\u0000sin-url';
+
+  /** Quién llamó al código actual: una extensión (wallet), la página o desconocido. */
+  function callerKind(): 'extension' | 'page' | 'unknown' {
+    const lines = ErrorStack().split('\n').slice(1);
+    for (const l of lines) {
+      if (l.includes(OUR_URL)) continue;
+      if (/chrome-extension:\/\//.test(l)) return 'extension';
+      if (/https?:\/\/|about:|blob:|data:/.test(l)) return 'page';
+    }
+    return 'unknown';
+  }
   const RPC_TIMEOUT_MS = 1500;
 
   // ── canal privado con el script aislado ───────────────────────────────────
@@ -89,6 +106,16 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
         ns,
       });
     });
+  }
+
+  function threat(kind: ThreatKind, detail: string): void {
+    port.postMessage({ t: 'threat', kind, detail });
+  }
+  let usedNotified = false;
+  function markUsed(): void {
+    if (usedNotified) return;
+    usedNotified = true;
+    port.postMessage({ t: 'used' });
   }
 
   port.onmessage = (ev: MessageEvent) => {
@@ -245,6 +272,8 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
         return v;
       },
       set(_t, prop, value) {
+        // La página reemplaza métodos del provider (p. ej. request): sospechoso.
+        if (typeof value === 'function' && callerKind() === 'page') threat('provider-tamper', `reemplazó ${String(prop).slice(0, 40)}`);
         return reflectSet(obj, prop, value, obj);
       },
       has(_t, prop) {
@@ -292,15 +321,19 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
       configurable: true,
       enumerable: true,
       get() {
-        return wrapProvider(read(), ns);
+        const v = read();
+        if (v) markUsed();
+        return wrapProvider(v, ns);
       },
       set(v: unknown) {
+        checkOverwrite(key, read(), v);
         if (src.kind === 'accessor' && src.set) reflectApply(src.set, W, [v]);
         else src = { kind: 'value', v };
       },
     });
     guarded.set(key, {
       redefine(desc: PropertyDescriptor) {
+        checkOverwrite(key, read(), 'value' in desc ? desc.value : desc.get);
         if ('value' in desc) src = { kind: 'value', v: desc.value };
         else if (desc.get || desc.set) src = { kind: 'accessor', ...(desc.get ? { get: desc.get } : {}), ...(desc.set ? { set: desc.set } : {}) };
       },
@@ -308,6 +341,12 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
   }
 
   const guarded = new MapC<PropertyKey, { redefine(d: PropertyDescriptor): void }>();
+
+  /** Un script de la PÁGINA reemplaza un provider de wallet ya instalado. */
+  function checkOverwrite(key: string, before: unknown, after: unknown): void {
+    if (!before || before === after || proxies.has(after as object)) return;
+    if (callerKind() === 'page') threat('provider-overwrite', `window.${key} reemplazado por un script de la página`);
+  }
 
   // Si una wallet (o un script) redefine window.ethereum con defineProperty,
   // conservamos nuestro accessor y solo cambiamos la fuente del valor.
@@ -350,6 +389,7 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
       const detail = (ev as CustomEvent<{ info?: unknown; provider?: unknown }>).detail;
       if (!detail || !looksLikeProvider(detail.provider)) return;
       const wrapped = wrapProvider(detail.provider, 'evm');
+      markUsed();
       if (wrapped === detail.provider) return;
       reflectApply(stopImmediate, ev, []);
       const ne = new CustomEventC('eip6963:announceProvider', { detail: freeze({ info: detail.info, provider: wrapped }) });
@@ -358,4 +398,68 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
     },
     true,
   ]);
+
+  // ── Canal interno de la wallet ────────────────────────────────────────────
+  // Un script de la página puede intentar hablarle a la wallet por su canal
+  // de mensajes (window.postMessage hacia su content script) y saltearse
+  // window.ethereum. Se bloquea si lleva un método sensible y lo envía la página.
+  const nativePostMessage = W.postMessage;
+  const guardedPostMessage = function (this: unknown, ...args: unknown[]): void {
+    const self = this === undefined || this === null ? W : this;
+    if (self === W) {
+      const m = containsSensitiveRpc(args[0]);
+      if (m && callerKind() === 'page') {
+        threat('wallet-channel', `${m} enviado directo al canal de la wallet`);
+        return;
+      }
+    }
+    reflectApply(nativePostMessage, self, args);
+  };
+  try {
+    defineProperty(W, 'postMessage', { value: guardedPostMessage, writable: false, configurable: false, enumerable: true });
+  } catch {
+    /* si no se puede, queda la detección por análisis de firmas */
+  }
+
+  // ── Portapapeles ─────────────────────────────────────────────────────────
+  // 1) Durante un "copy", si la página cambia la dirección seleccionada por
+  //    otra, se restaura la original.
+  let copySelection: string | null = null;
+  reflectApply(addEvent, W, [
+    'copy',
+    () => {
+      copySelection = W.getSelection()?.toString() ?? null;
+      setTimeoutF(() => {
+        copySelection = null;
+      }, 0);
+    },
+    true,
+  ]);
+  const nativeSetData = DataTransfer.prototype.setData;
+  DataTransfer.prototype.setData = function (this: DataTransfer, format: string, data: string): void {
+    if (copySelection !== null && typeof data === 'string' && /text/i.test(format)) {
+      const selected = findAddresses(copySelection);
+      const written = findAddresses(data);
+      if (selected.length && written.length && !written.every((w) => selected.some((x) => sameAddress(w, x)))) {
+        threat('clipboard-copy-swap', 'la página cambió la dirección copiada');
+        return reflectApply(nativeSetData, this, [format, copySelection]) as void;
+      }
+    }
+    return reflectApply(nativeSetData, this, [format, data]) as void;
+  };
+  // 2) Escribir una dirección en el portapapeles sin que el usuario haya hecho
+  //    clic o tecleado (malware "clipper" en la página) se bloquea.
+  const clip = (W.navigator as Navigator & { clipboard?: Clipboard }).clipboard;
+  if (clip) {
+    const proto = Object.getPrototypeOf(clip) as Clipboard;
+    const nativeWriteText = proto.writeText;
+    proto.writeText = function (this: Clipboard, text: string): Promise<void> {
+      const active = (W.navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive ?? true;
+      if (!active && typeof text === 'string' && findAddresses(text).length) {
+        threat('clipboard-write', 'escritura de una dirección en el portapapeles sin acción del usuario');
+        return PromiseC.reject(new DOMException('Bloqueado por WalletShield', 'NotAllowedError'));
+      }
+      return reflectApply(nativeWriteText, this, [text]) as Promise<void>;
+    };
+  }
 })();

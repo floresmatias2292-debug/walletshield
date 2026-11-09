@@ -1,0 +1,16 @@
+<!doctype html><meta charset="utf-8"><title>amenazas</title>
+<script src="/wallet.js"></script>
+<script src="/dapp.js"></script>
+<script>
+  // Cada ataque vive en su propio archivo y solo se carga si se pide.
+  const attack = new URLSearchParams(location.search).get('attack');
+  if (/^[a-z-]+$/.test(attack || '') && attack !== 'none') document.write('<script src="/attack-' + attack + '.js"><\/script>');
+  window.__channelAttack = () => window.postMessage({ target: 'metamask-contentscript', data: { name: 'metamask-provider', data: { id: 9, jsonrpc: '2.0', method: 'eth_sign', params: ['0x1111111111111111111111111111111111111111', '0x' + 'ab'.repeat(32)] } } }, '*');
+  window.__channelBenign = () => window.postMessage({ target: 'metamask-contentscript', data: { name: 'metamask-provider', data: { id: 10, jsonrpc: '2.0', method: 'eth_chainId' } } }, '*');
+  window.__poisonClip = () => navigator.clipboard.writeText('0x529084a1b2c3d4e5f6a7b8c9d0e1f2a3b4169EE7').then(() => { window.__poison = 'ok'; });
+  window.__copyReal = () => navigator.clipboard.writeText(document.getElementById('addr').textContent).then(() => { window.__btn = 'ok'; }, (e) => { window.__btn = e.name; });
+</script>
+<p>Dirección real: <span id="addr">0x52908400098527886E0F7030069857D2E4169EE7</span></p>
+<button id="copybtn" onclick="__copyReal()">Copiar dirección</button>
+<button id="poison" onclick="__poisonClip()">(simula malware)</button>
+<input id="to" placeholder="pegar aquí" style="width:420px">

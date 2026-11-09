@@ -13,6 +13,8 @@ export interface Settings {
   readonly rdapLookup: boolean;
   /** Firewall de wallets (análisis de firmas y transacciones). */
   readonly firewall: boolean;
+  /** Protección del portapapeles (direcciones reemplazadas al copiar/pegar). */
+  readonly clipboardGuard: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -22,6 +24,7 @@ export const DEFAULT_SETTINGS: Settings = {
   allowlist: [],
   rdapLookup: false,
   firewall: true,
+  clipboardGuard: true,
 };
 
 const STRICTNESS: readonly Strictness[] = ['relaxed', 'normal', 'strict'];
@@ -63,5 +66,6 @@ export function parseSettings(input: unknown): Settings {
     allowlist,
     rdapLookup: input.rdapLookup === true,
     firewall: input.firewall !== false,
+    clipboardGuard: input.clipboardGuard !== false,
   };
 }

@@ -82,6 +82,12 @@ function run(method: string, params: readonly unknown[], ctx: AnalysisContext): 
       text: `Además, ${ctx.input.pageHost} parece imitar a un sitio conocido.`,
     });
   }
+  // Scripts sospechosos detectados en la página: cualquier firma pasa a alto.
+  for (const t of ctx.input.pageThreats ?? []) {
+    if (t.risk === 'high' || (t.risk === 'medium' && !harmless)) {
+      r.add({ code: 'malicious-script', risk: t.risk === 'high' ? 'high' : 'medium', text: `Esta página ${t.text}` });
+    }
+  }
   return {
     method,
     risk: r.risk,

@@ -25,6 +25,12 @@
     removeListener() { return this; },
   };
   window.__rawWallet = provider; // solo para medir la latencia sin proxy
+  // Canal interno simulado (como el content script de MetaMask): registra lo que recibe.
+  window.__channelGot = [];
+  window.addEventListener('message', (e) => {
+    const d = e.data;
+    if (d && d.target === 'metamask-contentscript') window.__channelGot.push(d.data && d.data.data && d.data.data.method);
+  });
   if (mode === 'define') Object.defineProperty(window, 'ethereum', { value: provider, configurable: false, writable: false });
   else window.ethereum = provider;
   const announce = () => window.dispatchEvent(new CustomEvent('eip6963:announceProvider', {

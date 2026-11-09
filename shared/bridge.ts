@@ -29,9 +29,16 @@ export interface FrameInfo {
   readonly h: number;
 }
 
+/** Comportamientos sospechosos que el script MAIN observa en la página. */
+export const THREAT_KINDS = ['provider-overwrite', 'provider-tamper', 'wallet-channel', 'clipboard-write', 'clipboard-copy-swap'] as const;
+export type ThreatKind = (typeof THREAT_KINDS)[number];
+
 export type MainToIso =
   | { t: 'req'; id: number; method: string; params: unknown[]; frame: FrameInfo; ns: 'evm' | 'solana' }
-  | { t: 'rpc-res'; id: number; ok: boolean; result: unknown };
+  | { t: 'rpc-res'; id: number; ok: boolean; result: unknown }
+  | { t: 'threat'; kind: ThreatKind; detail: string }
+  /** La página empezó a usar un provider de wallet (dispara el escaneo diferido de scripts). */
+  | { t: 'used' };
 
 export type IsoToMain =
   | { t: 'ack'; id: number }
@@ -55,6 +62,23 @@ export function parseMainToIso(v: unknown): MainToIso | null {
     return { t: 'req', id: v.id, method: v.method, params: v.params, frame: { top: f.top, w: f.w, h: f.h }, ns: v.ns };
   }
   if (v.t === 'rpc-res' && isId(v.id) && typeof v.ok === 'boolean') return { t: 'rpc-res', id: v.id, ok: v.ok, result: v.result };
+  if (v.t === 'threat' && typeof v.kind === 'string' && (THREAT_KINDS as readonly string[]).includes(v.kind) && typeof v.detail === 'string') {
+    return { t: 'threat', kind: v.kind as ThreatKind, detail: v.detail.slice(0, 200) };
+  }
+  if (v.t === 'used') return { t: 'used' };
+  return null;
+}
+
+/** Busca un payload JSON-RPC sensible dentro de un mensaje arbitrario (hasta 5 niveles). */
+export function containsSensitiveRpc(v: unknown, depth = 0): string | null {
+  if (depth > 5 || typeof v !== 'object' || v === null) return null;
+  const m = (v as { method?: unknown }).method;
+  if (typeof m === 'string' && SENSITIVE_METHODS.has(m)) return m;
+  const values = Array.isArray(v) ? v.slice(0, 20) : Object.values(v as Record<string, unknown>).slice(0, 20);
+  for (const x of values) {
+    const hit = containsSensitiveRpc(x, depth + 1);
+    if (hit) return hit;
+  }
   return null;
 }
 

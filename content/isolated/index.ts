@@ -14,6 +14,10 @@ import { riskAtLeast, type RiskLevel } from '../../shared/risk';
 import { toBigInt } from '../../shared/evm/hex';
 import { resolveLookups, type Rpc } from './lookups';
 import { askUser } from './modal';
+import { addThreat, noteRiskyRequest, pageThreats, THREAT_TEXT, type PageThreat } from './threats';
+import { scanScripts, scheduleScan } from './script-scan';
+import { installClipboardGuard } from './clipboard';
+import { toast } from './toast';
 
 let port: MessagePort | null = null;
 
@@ -84,7 +88,7 @@ function decide(id: number, allow: boolean): void {
   port?.postMessage({ t: 'decision', id, allow });
 }
 
-function report(kind: 'fw-block' | 'fw-allow' | 'fw-auto-block', a: Analysis, host: string): void {
+function report(kind: 'fw-block' | 'fw-allow' | 'fw-auto-block' | 'fw-threat', a: Pick<Analysis, 'method' | 'risk' | 'findings'>, host: string): void {
   void chrome.runtime
     .sendMessage({ type: 'fw:event', kind, method: a.method, risk: a.risk, host, codes: a.findings.map((f) => f.code).slice(0, 8) })
     .catch(() => undefined);
@@ -100,12 +104,46 @@ function technicalDump(method: string, params: unknown[]): string {
   return s.length > 4000 ? `${s.slice(0, 4000)}\n…` : s;
 }
 
+/** Registra una amenaza de la página, avisa al usuario y al service worker. */
+function recordThreat(t: PageThreat, notify = true): void {
+  if (!addThreat(t)) return;
+  const host = hostnameFromUrl(location.href) ?? location.hostname;
+  report('fw-threat', { method: t.id.slice(0, 64), risk: t.risk, findings: [{ code: 'malicious-script', risk: t.risk, text: t.text }] }, host);
+  if (notify && t.risk === 'high') toast('Comportamiento sospechoso', `Esta página ${t.text} Desconfía de cualquier firma que te pida.`);
+}
+
+let scanScheduled = false;
+async function maybeScan(): Promise<void> {
+  if (scanScheduled) return;
+  scanScheduled = true;
+  const s = await getSettings();
+  if (!s.firewall) return;
+  scheduleScan((hits) => {
+    for (const h of hits) recordThreat({ id: `script:${h.id}`, risk: h.risk, text: `contiene código sospechoso: ${h.text}` });
+  });
+}
+
+void getSettings().then((s) => {
+  if (s.clipboardGuard) {
+    installClipboardGuard((text) => recordThreat({ id: 'clipboard-paste', risk: 'high', text }, false));
+  }
+});
+
 async function onMain(raw: unknown): Promise<void> {
   const msg = parseMainToIso(raw);
   if (!msg) return;
   if (msg.t === 'rpc-res') {
     rpcPending.get(msg.id)?.({ ok: msg.ok, result: msg.result });
     rpcPending.delete(msg.id);
+    return;
+  }
+  if (msg.t === 'threat') {
+    const def = THREAT_TEXT[msg.kind];
+    recordThreat({ id: msg.kind, risk: def.risk, text: def.text });
+    return;
+  }
+  if (msg.t === 'used') {
+    void maybeScan();
     return;
   }
   port?.postMessage({ t: 'ack', id: msg.id });
@@ -132,6 +170,7 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
       hardBlockInStrict: true,
     };
     report('fw-auto-block', a, host);
+    toast('Firma bloqueada', 'Un marco invisible de esta página pidió una firma a tu wallet. Se bloqueó automáticamente.');
     return false;
   }
 
@@ -150,6 +189,12 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
   const account = Array.isArray(accounts) && typeof accounts[0] === 'string' ? accounts[0].toLowerCase() : null;
   const input = baseInput(host, chainId === null ? null : Number(chainId), account, bad);
 
+  // Resultado del escaneo de scripts (si todavía corre, se espera un poco).
+  void maybeScan();
+  const hits = await Promise.race([scanScripts(), new Promise<null>((r) => setTimeout(() => r(null), 400))]);
+  for (const h of hits ?? []) recordThreat({ id: `script:${h.id}`, risk: h.risk, text: `contiene código sospechoso: ${h.text}` }, false);
+  input.pageThreats = pageThreats();
+
   const lookups = lookupsFor(method, params, input);
   if (lookups.length) input.answers = await resolveLookups(rpc, lookups);
 
@@ -158,6 +203,11 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
   if (!riskAtLeast(analysis.risk, modalThreshold(s.strictness)) || analysis.risk === 'none') {
     return true;
   }
+  // Una página que insiste con solicitudes peligrosas se marca como maliciosa.
+  if (analysis.risk === 'high' && noteRiskyRequest()) {
+    const def = THREAT_TEXT['request-burst'];
+    recordThreat({ id: 'request-burst', risk: def.risk, text: def.text }, false);
+  }
   const hardBlock = s.strictness === 'strict' && analysis.hardBlockInStrict;
   const allow = await askUser({ analysis, host, hardBlock, technical: technicalDump(method, params) });
   report(allow ? 'fw-allow' : hardBlock ? 'fw-auto-block' : 'fw-block', analysis, host);
@@ -165,5 +215,5 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
 }
 
 function baseInput(host: string, chainId: number | null, account: string | null, bad: Set<string>): AnalysisInput & { answers: Map<string, unknown> } {
-  return { chainId, account, pageHost: host, siteRisk: siteRisk(host), now: Date.now(), badAddresses: bad, answers: new Map() };
+  return { chainId, account, pageHost: host, siteRisk: siteRisk(host), pageThreats: pageThreats(), now: Date.now(), badAddresses: bad, answers: new Map() };
 }

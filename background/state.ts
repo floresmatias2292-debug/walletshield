@@ -25,7 +25,7 @@ export interface Stats {
 
 export type EventKind =
   | 'list-block' | 'heuristic-block' | 'heuristic-warn' | 'proceed' | 'lists-updated' | 'error'
-  | 'fw-block' | 'fw-allow' | 'fw-auto-block';
+  | 'fw-block' | 'fw-allow' | 'fw-auto-block' | 'fw-threat';
 
 export interface LogEvent {
   t: number;

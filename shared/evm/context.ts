@@ -13,6 +13,8 @@ export interface AnalysisInput {
   account: string | null;
   pageHost: string;
   siteRisk: RiskLevel;
+  /** Comportamientos sospechosos observados en la página (fase 4). */
+  pageThreats?: readonly { readonly risk: RiskLevel; readonly text: string }[];
   now: number;
   badAddresses: ReadonlySet<string>;
   /** Respuestas a consultas, por lookupKey. */

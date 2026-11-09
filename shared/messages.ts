@@ -54,14 +54,14 @@ export function isExtensionPageSender(sender: chrome.runtime.MessageSender, exte
 /** Único mensaje que aceptan los content scripts: reportar una decisión del firewall. */
 export interface FirewallEvent {
   readonly type: 'fw:event';
-  readonly kind: 'fw-block' | 'fw-allow' | 'fw-auto-block';
+  readonly kind: 'fw-block' | 'fw-allow' | 'fw-auto-block' | 'fw-threat';
   readonly method: string;
   readonly risk: RiskLevel;
   readonly host: string;
   readonly codes: readonly string[];
 }
 
-const FW_KINDS = new Set(['fw-block', 'fw-allow', 'fw-auto-block']);
+const FW_KINDS = new Set(['fw-block', 'fw-allow', 'fw-auto-block', 'fw-threat']);
 const RISKS = new Set(['none', 'low', 'medium', 'high']);
 
 export function parseFirewallEvent(msg: unknown): FirewallEvent | null {
@@ -79,4 +79,16 @@ export function parseFirewallEvent(msg: unknown): FirewallEvent | null {
     host: msg.host,
     codes: msg.codes as string[],
   };
+}
+
+/** Portapapeles: la última dirección copiada (solo en memoria de sesión del service worker). */
+export type ClipMessage = { readonly type: 'clip:copy'; readonly address: string } | { readonly type: 'clip:get' };
+
+export function parseClipMessage(msg: unknown): ClipMessage | null {
+  if (!isObj(msg)) return null;
+  if (msg.type === 'clip:get') return { type: 'clip:get' };
+  if (msg.type === 'clip:copy' && typeof msg.address === 'string' && /^[0-9A-Za-z]{25,64}$/.test(msg.address)) {
+    return { type: 'clip:copy', address: msg.address };
+  }
+  return null;
 }

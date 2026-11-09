@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "WalletShield",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Protección contra phishing y drainers para wallets cripto. Analiza localmente, sin telemetría.",
   "minimum_chrome_version": "121",
   "background": {

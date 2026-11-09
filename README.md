@@ -2,14 +2,14 @@
 
 Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigidos a wallets cripto (MetaMask, Rabby y, opcionalmente, Phantom). Todo el análisis es local: **cero telemetría**. Lo único que sale del navegador es la descarga de las listas públicas de phishing.
 
-> **Estado: fase 3 de 8.** Ya funcionan el bloqueo de phishing por dominio, la detección de imitaciones y el firewall de wallets EVM. La detección de scripts maliciosos, Solana, el popup y opciones, y el monitor en la nube llegan en las próximas fases.
+> **Estado: fase 4 de 8.** Ya funcionan el bloqueo de phishing por dominio, la detección de imitaciones, el firewall de wallets EVM y la detección de scripts maliciosos y clipboard hijacking. Solana, el popup y opciones, y el monitor en la nube llegan en las próximas fases.
 
 | Fase | Contenido | Estado |
 |---|---|---|
 | 1 | Arquitectura y plan | ✅ |
 | 2 | Bloqueo por dominio (declarativeNetRequest) + heurísticas | ✅ |
 | 3 | Firewall de wallets EVM (proxy del provider, decodificador, modal) | ✅ |
-| 4 | Scripts maliciosos y clipboard hijacking | ⏳ |
+| 4 | Scripts maliciosos y clipboard hijacking | ✅ |
 | 5 | Solana / Phantom | ⏳ |
 | 6 | Popup y página de opciones | ⏳ |
 | 7 | Monitor en la nube (Ethereum + Arbitrum) con alertas de Telegram | ⏳ |
@@ -133,6 +133,24 @@ Página ──request()──► Proxy de WalletShield (world MAIN, document_sta
 - firma de bajo riesgo, de punta a punta: +0,4 ms (objetivo < 5 ms);
 - análisis puro: < 1 ms en promedio (test unitario con un Permit2 de 4 tokens).
 
+## Scripts maliciosos y portapapeles (fase 4)
+
+Todo corre dentro de la página, sin costo en sitios que no usan wallets.
+
+| Amenaza | Cómo se detecta | Qué hace WalletShield |
+|---|---|---|
+| Un script de la página **reemplaza `window.ethereum`** | La pila de llamadas muestra que el cambio viene de la página y no de una extensión (wallet) | Aviso. Desde ese momento, cualquier firma en la página es de riesgo alto |
+| Un script **modifica funciones del provider** (`ethereum.request = …`) | Igual que el anterior | Aviso. Las firmas pasan a riesgo medio o alto |
+| Un script **le habla directo a la wallet** por su canal interno (`postMessage` a `metamask-contentscript`) para saltearse el firewall | Hook de `window.postMessage` con un payload JSON-RPC sensible enviado por la página | **Se bloquea** el mensaje. Las lecturas siguen funcionando |
+| **Código de kits de drainers** | Reglas sobre el código de la página (`shared/scripts/signatures.ts`): reporte a bots de Telegram + pedido de firmas, escaneo de activos en APIs de terceros + permisos masivos, vocabulario de kits, hooks del provider, reemplazo de direcciones. También admite hashes SHA-256 exactos | Aviso. Cualquier firma pasa a riesgo alto |
+| **Ráfaga** de solicitudes peligrosas (4 de riesgo alto en 1 minuto) | Conteo en la página | Se marca la página como maliciosa |
+| **Iframe oculto** que pide firmas | Tamaño del marco | Bloqueo automático con aviso |
+| La página **cambia la dirección que copias** | Hook de `DataTransfer.setData` durante el evento `copy` | Se **restaura** la dirección que seleccionaste |
+| La página **escribe una dirección en el portapapeles** sin un clic o tecla tuya | Hook de `navigator.clipboard.writeText` + `userActivation` | **Se bloquea**. Los botones "Copiar" normales siguen funcionando |
+| Al **pegar**, la dirección se parece a la copiada pero no es la misma (address poisoning, malware en tu PC) | Se recuerda la última dirección copiada en el navegador (solo en memoria de sesión) y se comparan los primeros y últimos caracteres | **Se bloquea el pegado** con aviso. Si es totalmente distinta, solo se avisa |
+
+El escaneo de código es diferido: se programa en un momento ocioso, solo la primera vez que la página usa un provider de wallet. Revisa los scripts inline y los del mismo origen (como máximo 3 MB). Los scripts de otros orígenes que estén en las listas ya los bloquea DNR.
+
 ## Permisos
 
 | Permiso | Para qué |
@@ -158,13 +176,21 @@ No se usa `tabs`, `declarativeNetRequestFeedback`, `scripting` ni `<all_urls>`.
 ### Firewall (fase 3)
 
 - **WalletShield no puede modificar el código interno de MetaMask ni Rabby.** Protege la capa entre la página y la wallet.
-- **Canal interno de la wallet:** un script malicioso puede hablarle a la wallet por su protocolo interno de mensajes (`window.postMessage` hacia el content script de MetaMask) sin pasar por `window.ethereum`. Esa vía no se puede interceptar desde una extensión. La fase 4 agrega detección de scripts que lo intenten.
+- **Canal interno de la wallet:** desde la fase 4 se bloquean los mensajes sensibles que la página envía por `window.postMessage`. Un atacante avanzado podría conseguir un `postMessage` nativo desde un iframe creado antes de que WalletShield se inyecte en él. Es un caso raro, pero posible.
 - **Orden de carga entre extensiones:** Chrome no garantiza qué extensión inyecta primero. Si una wallet fija `window.ethereum` como no configurable y no escribible *antes* que WalletShield, ese objeto no se puede envolver. Los providers EIP-6963 y los definidos después sí quedan protegidos (verificado en el e2e).
 - **Falla cerrada:** si el análisis no responde en 2,5 s, la solicitud se bloquea.
 - **Consultas on-chain:** para saber si una dirección es contrato o cuenta personal, y para leer saldos y decimales, se consulta el RPC que ya usa tu wallet (solo lectura). No se contacta a terceros.
 - **"Contrato recién desplegado o sin verificar":** necesita un explorador (Etherscan) o un simulador (Tenderly) con tu API key. Llegará como opción en la fase 6, desactivada por defecto. Mientras tanto, cualquier contrato desconocido recibe una advertencia.
 - **Direcciones de drainers:** el `address.json` de ScamSniffer no se actualiza desde 2024. Es una capa extra; la detección principal analiza qué se firma.
 - **Acceso a `chrome.storage.local`:** los content scripts leen los ajustes y la lista de direcciones desde ahí. La página no puede acceder (mundo aislado).
+
+### Scripts y portapapeles (fase 4)
+
+- **No hay hashes verificados:** no encontramos una lista pública, mantenida y con licencia abierta de hashes de kits de drainers. El motor admite hashes, pero viene con la lista vacía; la detección se basa en indicadores de comportamiento, que un atacante puede ofuscar.
+- **Atribución por pila de llamadas:** para saber si un cambio viene de la página o de una wallet se usa la pila de llamadas. Código que se ejecuta sin pila (por ejemplo, desde ciertos callbacks nativos) se trata como "desconocido" y no se marca.
+- **Campos de texto:** el reemplazo al copiar desde un `<input>` o `<textarea>` no se puede comparar, porque Chrome no expone esa selección.
+- **Malware en tu PC:** la guardia de pegado solo conoce lo que copiaste *dentro del navegador*. Si un malware cambia el portapapeles cuando copias en otra app, WalletShield no tiene con qué comparar.
+- **Falsos positivos posibles:** el aviso medio de "funciones del provider modificadas" podría aparecer en sitios legítimos que parchean el provider. Es raro, pero puede pasar.
 
 ### Bloqueo por dominio (fase 2)
 
@@ -198,6 +224,12 @@ El test del firewall no necesita listas. Usa una dapp y una wallet simuladas, e 
 
 ```bash
 npm run e2e:firewall
+```
+
+El test de la fase 4 simula ataques reales: reemplazo del provider, uso del canal interno, kit de drainer, clipper al copiar, escritura silenciosa al portapapeles y pegado de una dirección parecida.
+
+```bash
+npm run e2e:threats
 ```
 
 Con `WS_SS_REAL=1` y `ss_domains.json` en la misma carpeta, el test usa la lista real completa de ScamSniffer (365.000 dominios, prueba de escala).

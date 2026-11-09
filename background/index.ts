@@ -8,7 +8,7 @@
 import { syncAll, writeUpstreamAllowRule, writeUserAllowRule, addSessionAllow } from './lists/dnr-sync';
 import { allowForSession, blockedContextFor, forgetTab, onBeforeNavigate } from './navigation-guard';
 import { bumpBlocked, getSettings, logEvent } from './state';
-import { isExtensionPageSender, parseFirewallEvent, parsePrivilegedRequest } from '../shared/messages';
+import { isExtensionPageSender, parseClipMessage, parseFirewallEvent, parsePrivilegedRequest } from '../shared/messages';
 
 const ALARM = 'lists-update';
 const PERIOD_MIN = 6 * 60;
@@ -63,8 +63,18 @@ chrome.storage.onChanged.addListener((changes, area) => {
 // Mensajes de content scripts (no confiables): solo eventos del firewall,
 // validados y con límite de frecuencia por pestaña.
 const fwRate = new Map<number, { t: number; n: number }>();
-chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.tab?.id || isExtensionPageSender(sender, chrome.runtime.id)) return false;
+  const clip = parseClipMessage(raw);
+  if (clip) {
+    // Última dirección copiada: solo en storage.session (memoria, no accesible a content scripts).
+    if (clip.type === 'clip:copy') {
+      void chrome.storage.session.set({ lastCopied: { address: clip.address, t: Date.now() } });
+      return false;
+    }
+    void chrome.storage.session.get('lastCopied').then((r) => sendResponse(r.lastCopied ?? null));
+    return true;
+  }
   const ev = parseFirewallEvent(raw);
   if (!ev) return false;
   const now = Date.now();
@@ -72,8 +82,14 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
   if (r && now - r.t < 60_000) {
     if (++r.n > 30) return false;
   } else fwRate.set(sender.tab.id, { t: now, n: 1 });
+  const tabId = sender.tab.id;
   void (async () => {
-    if (ev.kind !== 'fw-allow') await bumpBlocked();
+    if (ev.kind === 'fw-threat' && ev.risk === 'high') {
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: '#c62828' });
+      await chrome.action.setBadgeText({ tabId, text: '!' });
+      await chrome.action.setTitle({ tabId, title: `WalletShield: comportamiento sospechoso en ${ev.host}` });
+    }
+    if (ev.kind === 'fw-block' || ev.kind === 'fw-auto-block') await bumpBlocked();
     await logEvent({ kind: ev.kind, host: ev.host, detail: `${ev.method} · ${ev.risk} · ${ev.codes.join(',')}` });
   })();
   return false;

@@ -7,7 +7,7 @@ export type FindingCode =
   | 'nft-listing' | 'nft-sale-zero' | 'bulk-orders' | 'blur-bulk'
   | 'native-drain' | 'value-to-contract' | 'drainer-function' | 'token-transfer' | 'nft-transfer'
   | 'eip7702' | 'batch-calls' | 'contract-creation' | 'chain-mismatch' | 'typed-data' | 'legacy-typed-data'
-  | 'suspicious-site' | 'undecodable' | 'add-chain' | 'grant-permissions' | 'unknown-method';
+  | 'suspicious-site' | 'malicious-script' | 'undecodable' | 'add-chain' | 'grant-permissions' | 'unknown-method';
 
 export interface Finding {
   readonly code: FindingCode;
