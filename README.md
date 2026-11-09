@@ -2,7 +2,7 @@
 
 Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigidos a wallets cripto (MetaMask, Rabby y, opcionalmente, Phantom). Todo el análisis es local: **cero telemetría**. Lo único que sale del navegador es la descarga de las listas públicas de phishing.
 
-> **Estado: fase 6 de 8.** La extensión está completa: bloqueo de phishing, detección de imitaciones, firewall EVM y Solana, detección de scripts maliciosos y clipboard hijacking, popup y página de opciones. Faltan el monitor en la nube y la auditoría final.
+> **Estado: fase 7 de 8.** Están listas la extensión completa (bloqueo de phishing, imitaciones, firewall EVM y Solana, scripts maliciosos, portapapeles, popup y opciones) y el monitor en la nube con alertas de Telegram. Falta la medición de rendimiento y la auditoría final.
 
 | Fase | Contenido | Estado |
 |---|---|---|
@@ -12,7 +12,7 @@ Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigi
 | 4 | Scripts maliciosos y clipboard hijacking | ✅ |
 | 5 | Solana / Phantom | ✅ |
 | 6 | Popup y página de opciones | ✅ |
-| 7 | Monitor en la nube (Ethereum + Arbitrum) con alertas de Telegram | ⏳ |
+| 7 | Monitor en la nube (Ethereum, Arbitrum y Solana) con alertas de Telegram | ✅ |
 | 8 | Medición de rendimiento y auditoría de seguridad | ⏳ |
 
 ## Instalación en modo desarrollador
@@ -187,6 +187,16 @@ Todo corre dentro de la página, sin costo en sitios que no usan wallets.
 
 El escaneo de código es diferido: se programa en un momento ocioso, solo la primera vez que la página usa un provider de wallet. Revisa los scripts inline y los del mismo origen (como máximo 3 MB). Los scripts de otros orígenes que estén en las listas ya los bloquea DNR.
 
+## Monitor en la nube (fase 7)
+
+En `cloud-monitor/` hay un **Cloudflare Worker** (plan gratuito) que, cada 10 minutos y aunque tu computadora esté apagada, revisa tus direcciones **públicas** de Ethereum, Arbitrum y Solana. Avisa por **Telegram** ante:
+- aprobaciones nuevas, `setApprovalForAll` y permisos de Permit2;
+- tokens que salen **sin una transacción tuya** (la huella de un drainer);
+- transacciones firmadas con tu cuenta;
+- cambios de dueño o de autoridad en Solana.
+
+Cada alerta incluye enlaces a revoke.cash y al explorador. Guía paso a paso: [`cloud-monitor/README.md`](cloud-monitor/README.md).
+
 ## Popup y opciones (fase 6)
 
 <img src="docs/popup.png" width="300" alt="Popup de WalletShield">
@@ -312,6 +322,12 @@ El test de la interfaz cubre popup, opciones, exportar/importar, simulación con
 
 ```bash
 npm run e2e:ui
+```
+
+El monitor en la nube se prueba en el runtime real de Cloudflare (`workerd`), con RPC y Telegram simulados:
+
+```bash
+npm run e2e:monitor
 ```
 
 Con `WS_SS_REAL=1` y `ss_domains.json` en la misma carpeta, el test usa la lista real completa de ScamSniffer (365.000 dominios, prueba de escala).

@@ -1,0 +1,16 @@
+{
+  "name": "walletshield-cloud-monitor",
+  "version": "0.7.0",
+  "private": true,
+  "type": "module",
+  "description": "Monitor de direcciones públicas (Ethereum, Arbitrum, Solana) con alertas de Telegram. Cloudflare Workers + Cron.",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir .wrangler-dry"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^4.159.0"
+  }
+}

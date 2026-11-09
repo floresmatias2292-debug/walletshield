@@ -1,0 +1,35 @@
+# WalletShield — monitor en la nube (Cloudflare Workers, plan gratuito).
+# Guía completa: cloud-monitor/README.md
+name = "walletshield-monitor"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+# Cada 10 minutos (UTC). 144 ejecuciones/día: dentro del plan gratuito.
+[triggers]
+crons = ["*/10 * * * *"]
+
+# Estado (último bloque revisado, nonces, últimas firmas). Crea el namespace con:
+#   npx wrangler kv namespace create STATE
+# y pega aquí el id que te devuelve.
+[[kv_namespaces]]
+binding = "STATE"
+id = "REEMPLAZAR_CON_TU_KV_ID"
+
+[vars]
+# SOLO direcciones públicas, separadas por comas. Nunca claves privadas ni frases semilla.
+EVM_ADDRESSES = ""
+SOLANA_ADDRESSES = ""
+# Cadenas EVM a vigilar (ids): 1 = Ethereum, 42161 = Arbitrum One.
+EVM_CHAINS = "1,42161"
+# RPC públicos por defecto. Puedes poner los tuyos (Alchemy, Infura, Helius…).
+ETH_RPC_URL = "https://ethereum-rpc.publicnode.com"
+ARB_RPC_URL = "https://arb1.arbitrum.io/rpc"
+SOL_RPC_URL = "https://api.mainnet-beta.solana.com"
+# Nivel mínimo a notificar: "info" (todo: incluye cada transacción que firmes),
+# "media" o "alta" (solo lo más grave).
+NOTIFY_LEVEL = "info"
+
+# Secretos (NO van en este archivo):
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_CHAT_ID
