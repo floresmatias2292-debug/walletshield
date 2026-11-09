@@ -9,18 +9,31 @@ import { findAddresses, isLookalike, sameAddress, shortAddress } from '../../sha
 import { toast } from './toast';
 
 let lastCopied: { address: string; t: number } | null = null;
+let enabled = true;
 const RECENT_MS = 10 * 60_000;
+let lastRefresh = 0;
 
+/** Consulta la última dirección copiada (en cualquier pestaña) y si la guardia está activa. */
 function refresh(): void {
+  const now = Date.now();
+  if (now - lastRefresh < 1000) return;
+  lastRefresh = now;
   void chrome.runtime
     .sendMessage({ type: 'clip:get' })
     .then((r: unknown) => {
-      const o = r as { address?: unknown; t?: unknown } | null;
-      if (o && typeof o.address === 'string' && typeof o.t === 'number') {
-        if (!lastCopied || o.t > lastCopied.t) lastCopied = { address: o.address, t: o.t };
+      const o = (r ?? {}) as { enabled?: unknown; lastCopied?: { address?: unknown; t?: unknown } | null };
+      enabled = o.enabled !== false;
+      const lc = o.lastCopied;
+      if (lc && typeof lc.address === 'string' && typeof lc.t === 'number') {
+        if (!lastCopied || lc.t > lastCopied.t) lastCopied = { address: lc.address, t: lc.t };
       }
     })
     .catch(() => undefined);
+}
+
+function isEditable(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  return t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable;
 }
 
 export function installClipboardGuard(onThreat: (text: string) => void): void {
@@ -35,16 +48,20 @@ export function installClipboardGuard(onThreat: (text: string) => void): void {
     },
     true,
   );
-  addEventListener('focus', refresh, true);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refresh();
-  });
-  refresh();
+  // Solo se consulta al service worker cuando el usuario enfoca un campo
+  // editable (justo antes de pegar), no en cada carga de página.
+  addEventListener(
+    'focusin',
+    (ev) => {
+      if (isEditable(ev.target)) refresh();
+    },
+    true,
+  );
 
   addEventListener(
     'paste',
     (ev: ClipboardEvent) => {
-      if (!ev.isTrusted || !lastCopied || Date.now() - lastCopied.t > RECENT_MS) return;
+      if (!ev.isTrusted || !enabled || !lastCopied || Date.now() - lastCopied.t > RECENT_MS) return;
       const text = ev.clipboardData?.getData('text/plain') ?? '';
       const pasted = findAddresses(text);
       if (pasted.length !== 1) return;

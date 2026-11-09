@@ -9,9 +9,11 @@ import { HANDSHAKE_KEY, parseMainToIso, type FrameInfo } from '../../shared/brid
 import { analyzeRequest, lookupsFor, modalThreshold, type Analysis, type AnalysisInput } from '../../shared/evm';
 import { DomainAnalyzer } from '../../shared/domain/typosquat';
 import { hostnameFromUrl } from '../../shared/domain/normalize';
-import { parseSettings, type Settings } from '../../shared/settings';
+import type { ContentConfig } from '../../shared/settings';
 import { riskAtLeast, type RiskLevel } from '../../shared/risk';
 import { toBigInt } from '../../shared/evm/hex';
+import { knownContract, TOKEN_DECIMALS } from '../../shared/evm/known';
+import { formatUnits, shortAddr } from '../../shared/evm/format';
 import { resolveLookups, type Rpc } from './lookups';
 import { askUser } from './modal';
 import { analyzeSolanaRequest } from '../../shared/solana/analyzer';
@@ -37,25 +39,40 @@ addEventListener(
   true,
 );
 
-// ── ajustes y datos (se cargan una vez, con caché) ─────────────────────────
-let settings: Settings | null = null;
-let badAddresses: Set<string> | null = null;
-async function getSettings(): Promise<Settings> {
-  if (!settings) settings = parseSettings((await chrome.storage.local.get('settings')).settings);
-  return settings;
+// ── configuración: se pide al service worker solo cuando hace falta ────────
+// (el almacenamiento de la extensión no es accesible desde content scripts)
+const DEFAULT_CONFIG: ContentConfig = { strictness: 'normal', firewall: true, clipboardGuard: true, simulation: false };
+let configPromise: Promise<{ config: ContentConfig; bad: Set<string> }> | null = null;
+function loadConfig(): Promise<{ config: ContentConfig; bad: Set<string> }> {
+  configPromise ??= chrome.runtime
+    .sendMessage({ type: 'cs:config' })
+    .then((r: unknown) => {
+      const o = (r ?? {}) as { config?: Partial<ContentConfig>; badAddresses?: unknown };
+      const c = o.config ?? {};
+      const config: ContentConfig = {
+        strictness: c.strictness === 'relaxed' || c.strictness === 'strict' ? c.strictness : 'normal',
+        firewall: c.firewall !== false,
+        clipboardGuard: c.clipboardGuard !== false,
+        simulation: c.simulation === true,
+      };
+      const bad = new Set(Array.isArray(o.badAddresses) ? (o.badAddresses as unknown[]).filter((x): x is string => typeof x === 'string') : []);
+      return { config, bad };
+    })
+    .catch(() => ({ config: DEFAULT_CONFIG, bad: new Set<string>() }));
+  return configPromise;
+}
+// El service worker avisa cuando cambian los ajustes (solo él puede enviar esto).
+chrome.runtime.onMessage.addListener((msg: unknown, sender) => {
+  if (sender.id === chrome.runtime.id && !sender.tab && (msg as { type?: unknown } | null)?.type === 'cs:invalidate') configPromise = null;
+  return false;
+});
+
+async function getSettings(): Promise<ContentConfig> {
+  return (await loadConfig()).config;
 }
 async function getBadAddresses(): Promise<Set<string>> {
-  if (!badAddresses) {
-    const { badAddresses: list } = await chrome.storage.local.get('badAddresses');
-    badAddresses = new Set(Array.isArray(list) ? (list as string[]).filter((x) => typeof x === 'string') : []);
-  }
-  return badAddresses;
+  return (await loadConfig()).bad;
 }
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== 'local') return;
-  if (changes.settings) settings = null;
-  if (changes.badAddresses) badAddresses = null;
-});
 
 let domainAnalyzer: DomainAnalyzer | null = null;
 function siteRisk(host: string): RiskLevel {
@@ -124,11 +141,9 @@ async function maybeScan(): Promise<void> {
   });
 }
 
-void getSettings().then((s) => {
-  if (s.clipboardGuard) {
-    installClipboardGuard((text) => recordThreat({ id: 'clipboard-paste', risk: 'high', text }, false));
-  }
-});
+// Listeners baratos; la guardia consulta su estado al service worker solo al
+// enfocar un campo editable (no despierta al worker en cada carga de página).
+installClipboardGuard((text) => recordThreat({ id: 'clipboard-paste', risk: 'high', text }, false));
 
 async function onMain(raw: unknown): Promise<void> {
   const msg = parseMainToIso(raw);
@@ -212,13 +227,48 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
     recordThreat({ id: 'request-burst', risk: def.risk, text: def.text }, false);
   }
   const hardBlock = s.strictness === 'strict' && analysis.hardBlockInStrict;
-  const allow = await askUser({ analysis, host, hardBlock, technical: technicalDump(method, params) });
+  let shown = analysis;
+  if (s.simulation && !hardBlock && method === 'eth_sendTransaction' && chainId !== null) {
+    shown = await withSimulation(analysis, params[0], Number(chainId), account, rpc);
+  }
+  const allow = await askUser({ analysis: shown, host, hardBlock, technical: technicalDump(method, params) });
   report(allow ? 'fw-allow' : hardBlock ? 'fw-auto-block' : 'fw-block', analysis, host);
   return allow && !hardBlock;
 }
 
+/** Agrega al modal el resultado (informativo) de la simulación con Tenderly. */
+async function withSimulation(a: Analysis, rawTx: unknown, chainId: number, account: string | null, rpc: Rpc): Promise<Analysis> {
+  const t = (rawTx ?? {}) as Record<string, unknown>;
+  const from = typeof t.from === 'string' ? t.from : account;
+  if (!from || typeof t.to !== 'string') return a;
+  const block = toBigInt(await rpc('eth_blockNumber', []).catch(() => null));
+  const r = (await chrome.runtime
+    .sendMessage({
+      type: 'sim:run',
+      chainId,
+      blockNumber: block === null ? null : Number(block),
+      tx: { from, to: t.to, value: typeof t.value === 'string' ? t.value : '0x0', data: typeof t.data === 'string' ? t.data : '0x' },
+    })
+    .catch(() => null)) as { ok?: boolean; reverted?: boolean; error?: string; changes?: Array<{ kind: string; token: string; amount: string; counterparty: string }> } | null;
+  if (!r) return a;
+  if (!r.ok) return { ...a, summary: [...a.summary, `Simulación (Tenderly): no disponible — ${r.error ?? 'error'}.`] };
+  const lines = (r.changes ?? []).map((c) => {
+    const k = knownContract(c.token, chainId);
+    const amount = /^\d+$/.test(c.amount) ? (BigInt(c.amount) >= 1n << 100n ? 'ILIMITADO' : formatUnits(BigInt(c.amount), k ? (TOKEN_DECIMALS[k.label] ?? null) : null)) : c.amount;
+    const token = k?.label ?? shortAddr(c.token);
+    return c.kind === 'out'
+      ? `Simulación: salen ${amount} ${token} de tu wallet hacia ${shortAddr(c.counterparty)}.`
+      : c.kind === 'in'
+        ? `Simulación: entran ${amount} ${token} a tu wallet.`
+        : `Simulación: queda aprobado ${amount} de ${token} para ${shortAddr(c.counterparty)}.`;
+  });
+  if (r.reverted) lines.push('Simulación: la transacción FALLARÍA (revert).');
+  if (!lines.length) lines.push('Simulación: no se detectaron movimientos de tokens.');
+  return { ...a, summary: [...a.summary, ...lines] };
+}
+
 /** Solana: el análisis es 100 % local (no hace falta consultar la red). */
-async function evaluateSolana(method: string, params: unknown[], host: string, s: Settings): Promise<boolean> {
+async function evaluateSolana(method: string, params: unknown[], host: string, s: ContentConfig): Promise<boolean> {
   void maybeScan();
   const hits = await Promise.race([scanScripts(), new Promise<null>((r) => setTimeout(() => r(null), 400))]);
   for (const h of hits ?? []) recordThreat({ id: `script:${h.id}`, risk: h.risk, text: `contiene código sospechoso: ${h.text}` }, false);

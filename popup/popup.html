@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <title>WalletShield</title>
+  <link rel="stylesheet" href="../ui/base.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header class="row between">
+    <div class="row"><img src="../icons/icon-32.png" width="24" height="24" alt=""><h1>WalletShield</h1></div>
+    <span id="status" class="pill ok">Protección activa</span>
+  </header>
+
+  <section class="card" id="site">
+    <div class="small muted">Este sitio</div>
+    <div id="host" class="mono">—</div>
+    <div id="verdict" class="small"></div>
+    <button id="trust" type="button" hidden></button>
+    <p class="small muted note">Confiar en un sitio evita los avisos de dominio. Las firmas se siguen revisando igual.</p>
+  </section>
+
+  <section class="row stats">
+    <div class="card grow"><div class="stat" id="today">0</div><div class="small muted">amenazas bloqueadas hoy</div></div>
+    <div class="card grow"><div class="stat" id="total">0</div><div class="small muted">en total</div></div>
+  </section>
+
+  <section class="card">
+    <label class="switch"><span>Firewall de wallets</span><input type="checkbox" id="fw"></label>
+    <label class="switch"><span>Protección del portapapeles</span><input type="checkbox" id="clip"></label>
+    <div class="small muted" id="level"></div>
+  </section>
+
+  <section class="card">
+    <div class="row between"><h2 class="h2">Sitios de confianza</h2><span class="small muted" id="trustedCount"></span></div>
+    <ul class="list" id="trusted"></ul>
+  </section>
+
+  <footer class="row between">
+    <span class="small muted" id="lists"></span>
+    <button id="options" type="button">Opciones</button>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

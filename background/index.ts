@@ -8,7 +8,18 @@
 import { syncAll, writeUpstreamAllowRule, writeUserAllowRule, addSessionAllow } from './lists/dnr-sync';
 import { allowForSession, blockedContextFor, forgetTab, onBeforeNavigate } from './navigation-guard';
 import { bumpBlocked, getSettings, logEvent } from './state';
-import { isExtensionPageSender, parseClipMessage, parseFirewallEvent, parsePrivilegedRequest } from '../shared/messages';
+import { isExtensionPageSender, parseClipMessage, parseContentRequest, parseFirewallEvent, parsePrivilegedRequest } from '../shared/messages';
+import { contentConfig } from '../shared/settings';
+import { simulate } from './simulation';
+import { SOURCE_IDS } from './lists/sources';
+import { getSourceState } from './state';
+
+// El almacenamiento local (ajustes, registro de eventos, API key) solo es
+// accesible para páginas de la extensión y el worker, nunca para content
+// scripts. Lo que estos necesitan lo piden por mensaje ("cs:config").
+void chrome.storage.local.setAccessLevel?.({ accessLevel: 'TRUSTED_CONTEXTS' }).catch(() => undefined);
+
+const SECRET_KEY = 'secret:tenderlyKey';
 
 const ALARM = 'lists-update';
 const PERIOD_MIN = 6 * 60;
@@ -58,21 +69,50 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const after = changes.settings.newValue as { sources?: unknown; allowlist?: unknown } | undefined;
   if (JSON.stringify(before?.allowlist) !== JSON.stringify(after?.allowlist)) void writeUserAllowRule();
   if (JSON.stringify(before?.sources) !== JSON.stringify(after?.sources)) void syncAll();
+  // Las pestañas abiertas vuelven a pedir su configuración (sin esperar a recargar).
+  void chrome.tabs.query({}).then((tabs) => {
+    for (const t of tabs) if (t.id !== undefined) void chrome.tabs.sendMessage(t.id, { type: 'cs:invalidate' }).catch(() => undefined);
+  });
 });
 
 // Mensajes de content scripts (no confiables): solo eventos del firewall,
 // validados y con límite de frecuencia por pestaña.
 const fwRate = new Map<number, { t: number; n: number }>();
+const simRate = new Map<number, { t: number; n: number }>();
 chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || !sender.tab?.id || isExtensionPageSender(sender, chrome.runtime.id)) return false;
   const clip = parseClipMessage(raw);
   if (clip) {
     // Última dirección copiada: solo en storage.session (memoria, no accesible a content scripts).
     if (clip.type === 'clip:copy') {
-      void chrome.storage.session.set({ lastCopied: { address: clip.address, t: Date.now() } });
+      void getSettings().then((s) => (s.clipboardGuard ? chrome.storage.session.set({ lastCopied: { address: clip.address, t: Date.now() } }) : undefined));
       return false;
     }
-    void chrome.storage.session.get('lastCopied').then((r) => sendResponse(r.lastCopied ?? null));
+    void (async () => {
+      const s = await getSettings();
+      const r = await chrome.storage.session.get('lastCopied');
+      sendResponse({ enabled: s.clipboardGuard, lastCopied: s.clipboardGuard ? (r.lastCopied ?? null) : null });
+    })();
+    return true;
+  }
+  const req = parseContentRequest(raw);
+  if (req) {
+    const tabId = sender.tab.id;
+    void (async () => {
+      const s = await getSettings();
+      if (req.type === 'cs:config') {
+        const { badAddresses } = await chrome.storage.local.get('badAddresses');
+        return sendResponse({ config: contentConfig(s), badAddresses: Array.isArray(badAddresses) ? badAddresses : [] });
+      }
+      // Simulación: solo si el usuario la activó y cargó su key; máx. 10 por minuto por pestaña.
+      const key = (await chrome.storage.local.get(SECRET_KEY))[SECRET_KEY];
+      if (!s.simulation.enabled || typeof key !== 'string' || !key) return sendResponse({ ok: false, error: 'simulación desactivada' });
+      const now = Date.now();
+      const r = simRate.get(tabId);
+      if (r && now - r.t < 60_000 && ++r.n > 10) return sendResponse({ ok: false, error: 'demasiadas simulaciones' });
+      if (!r || now - r.t >= 60_000) simRate.set(tabId, { t: now, n: 1 });
+      return sendResponse(await simulate({ account: s.simulation.account, project: s.simulation.project, key }, req.chainId, req.blockNumber, req.tx));
+    })();
     return true;
   }
   const ev = parseFirewallEvent(raw);
@@ -130,7 +170,25 @@ chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {
       case 'state:get': {
         const settings = await getSettings();
         const { stats, events } = await chrome.storage.local.get(['stats', 'events']);
-        return sendResponse({ settings, stats: stats ?? null, events: events ?? [] });
+        const sources: Record<string, unknown> = {};
+        for (const id of SOURCE_IDS) {
+          const st = await getSourceState(id);
+          sources[id] = { count: st.count ?? null, lastSync: st.lastSync ?? null, error: st.error ?? null };
+        }
+        return sendResponse({ settings, stats: stats ?? null, events: events ?? [], sources });
+      }
+      case 'lists:sync':
+        return sendResponse(await syncAll());
+      case 'events:clear':
+        await chrome.storage.local.set({ events: [] });
+        return sendResponse({ ok: true });
+      case 'secret:set':
+        if (msg.key) await chrome.storage.local.set({ [SECRET_KEY]: msg.key });
+        else await chrome.storage.local.remove(SECRET_KEY);
+        return sendResponse({ ok: true });
+      case 'secret:status': {
+        const k = (await chrome.storage.local.get(SECRET_KEY))[SECRET_KEY];
+        return sendResponse({ hasKey: typeof k === 'string' && k.length > 0 });
       }
     }
   })();

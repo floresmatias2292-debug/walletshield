@@ -1,0 +1,9 @@
+body { width: 360px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+h1 { font-size: 17px; }
+.h2 { font-size: 14px; }
+#host { font-size: 15px; margin: 2px 0 4px; word-break: break-all; }
+#verdict.ok { color: var(--ok); } #verdict.warn { color: var(--warn); } #verdict.danger { color: var(--danger); }
+#trust { margin-top: 8px; width: 100%; }
+.note { margin: 8px 0 0; }
+.stats { gap: 10px; }
+.grow { flex: 1; text-align: center; }

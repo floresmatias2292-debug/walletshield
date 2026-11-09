@@ -9,7 +9,11 @@ import type { RiskLevel } from './risk';
 export type PrivilegedRequest =
   | { type: 'blocked:context' }
   | { type: 'blocked:proceed'; host: string }
-  | { type: 'state:get' };
+  | { type: 'state:get' }
+  | { type: 'lists:sync' }
+  | { type: 'events:clear' }
+  | { type: 'secret:set'; key: string }
+  | { type: 'secret:status' };
 
 export interface BlockedContext {
   readonly url: string | null;
@@ -30,7 +34,13 @@ export function parsePrivilegedRequest(msg: unknown): PrivilegedRequest | null {
   switch (msg.type) {
     case 'blocked:context':
     case 'state:get':
+    case 'lists:sync':
+    case 'events:clear':
+    case 'secret:status':
       return { type: msg.type };
+    case 'secret:set':
+      if (typeof msg.key !== 'string' || msg.key.length > 200 || !/^[\x21-\x7e]*$/.test(msg.key)) return null;
+      return { type: 'secret:set', key: msg.key };
     case 'blocked:proceed':
       if (typeof msg.host !== 'string' || msg.host.length > HOST_MAX) return null;
       return { type: 'blocked:proceed', host: msg.host };
@@ -89,6 +99,34 @@ export function parseClipMessage(msg: unknown): ClipMessage | null {
   if (msg.type === 'clip:get') return { type: 'clip:get' };
   if (msg.type === 'clip:copy' && typeof msg.address === 'string' && /^[0-9A-Za-z]{25,64}$/.test(msg.address)) {
     return { type: 'clip:copy', address: msg.address };
+  }
+  return null;
+}
+
+/** Pedidos de content scripts (no confiables) al service worker. */
+export type ContentRequest =
+  | { readonly type: 'cs:config' }
+  | { readonly type: 'sim:run'; readonly chainId: number; readonly blockNumber: number | null; readonly tx: SimTx };
+
+export interface SimTx {
+  readonly from: string;
+  readonly to: string;
+  readonly value: string;
+  readonly data: string;
+}
+
+const ADDR = /^0x[0-9a-fA-F]{40}$/;
+
+export function parseContentRequest(msg: unknown): ContentRequest | null {
+  if (!isObj(msg)) return null;
+  if (msg.type === 'cs:config') return { type: 'cs:config' };
+  if (msg.type === 'sim:run' && typeof msg.chainId === 'number' && Number.isSafeInteger(msg.chainId) && isObj(msg.tx)) {
+    const t = msg.tx;
+    if (typeof t.from !== 'string' || !ADDR.test(t.from) || typeof t.to !== 'string' || !ADDR.test(t.to)) return null;
+    if (typeof t.value !== 'string' || !/^(0x[0-9a-fA-F]{0,64}|\d{1,78})$/.test(t.value)) return null;
+    if (typeof t.data !== 'string' || !/^0x[0-9a-fA-F]*$/.test(t.data) || t.data.length > 200_000) return null;
+    const blockNumber = typeof msg.blockNumber === 'number' && Number.isSafeInteger(msg.blockNumber) && msg.blockNumber > 0 ? msg.blockNumber : null;
+    return { type: 'sim:run', chainId: msg.chainId, blockNumber, tx: { from: t.from, to: t.to, value: t.value, data: t.data } };
   }
   return null;
 }

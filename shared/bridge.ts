@@ -21,7 +21,7 @@ export const SENSITIVE_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /** Lecturas que ISOLATED puede pedir a la wallet a través de MAIN (sin popups, sin firmas). */
-export const READONLY_RPC: ReadonlySet<string> = new Set(['eth_chainId', 'eth_accounts', 'eth_getCode', 'eth_getBalance', 'eth_call']);
+export const READONLY_RPC: ReadonlySet<string> = new Set(['eth_chainId', 'eth_accounts', 'eth_blockNumber', 'eth_getCode', 'eth_getBalance', 'eth_call']);
 
 export interface FrameInfo {
   readonly top: boolean;

@@ -2,7 +2,7 @@
 
 Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigidos a wallets cripto (MetaMask, Rabby y, opcionalmente, Phantom). Todo el análisis es local: **cero telemetría**. Lo único que sale del navegador es la descarga de las listas públicas de phishing.
 
-> **Estado: fase 5 de 8.** Ya funcionan el bloqueo de phishing por dominio, la detección de imitaciones, el firewall de wallets EVM y Solana (Phantom y Wallet Standard) y la detección de scripts maliciosos y clipboard hijacking. El popup y opciones, el monitor en la nube y la auditoría final llegan en las próximas fases.
+> **Estado: fase 6 de 8.** La extensión está completa: bloqueo de phishing, detección de imitaciones, firewall EVM y Solana, detección de scripts maliciosos y clipboard hijacking, popup y página de opciones. Faltan el monitor en la nube y la auditoría final.
 
 | Fase | Contenido | Estado |
 |---|---|---|
@@ -11,7 +11,7 @@ Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigi
 | 3 | Firewall de wallets EVM (proxy del provider, decodificador, modal) | ✅ |
 | 4 | Scripts maliciosos y clipboard hijacking | ✅ |
 | 5 | Solana / Phantom | ✅ |
-| 6 | Popup y página de opciones | ⏳ |
+| 6 | Popup y página de opciones | ✅ |
 | 7 | Monitor en la nube (Ethereum + Arbitrum) con alertas de Telegram | ⏳ |
 | 8 | Medición de rendimiento y auditoría de seguridad | ⏳ |
 
@@ -187,6 +187,33 @@ Todo corre dentro de la página, sin costo en sitios que no usan wallets.
 
 El escaneo de código es diferido: se programa en un momento ocioso, solo la primera vez que la página usa un provider de wallet. Revisa los scripts inline y los del mismo origen (como máximo 3 MB). Los scripts de otros orígenes que estén en las listas ya los bloquea DNR.
 
+## Popup y opciones (fase 6)
+
+<img src="docs/popup.png" width="300" alt="Popup de WalletShield">
+
+**Popup:**
+- estado de la protección;
+- análisis del sitio actual, con "Confiar en este sitio" / "Quitar";
+- amenazas bloqueadas hoy y en total;
+- interruptores rápidos del firewall y del portapapeles;
+- sitios de confianza.
+
+**Opciones** ([captura](docs/opciones.png)):
+- **Nivel de protección:** relajado, normal o estricto.
+- **Protecciones:** firewall, portapapeles y RDAP (con su aviso de privacidad).
+- **Listas:** activar o desactivar cada fuente, con cantidad de dominios, última actualización, errores y botón **Actualizar ahora**.
+- **Sitios de confianza:** acepta un dominio o una URL completa y guarda solo el dominio.
+- **Simulación con Tenderly:** opcional y desactivada por defecto ([captura](docs/modal-simulacion.png)). Usa el endpoint v2 tal como lo define el SDK oficial `Tenderly/tenderly-sdk`. Cuando la activas:
+  - solo se simulan las transacciones que ya iban a mostrar el aviso;
+  - el resultado (salidas, entradas, aprobaciones, revert) aparece como información en el modal;
+  - la API key vive en una clave aparte del almacenamiento: no se exporta y no la pueden leer los content scripts.
+- **Exportar / importar:**
+  - el archivo JSON no lleva secretos ni el registro;
+  - al importar se valida todo, se descarta lo inválido y la simulación nunca se activa sola.
+- **Registro de eventos:** con filtros (bloqueos, amenazas, listas, errores) y opción de borrarlo.
+
+Los cambios se aplican al instante, también en las pestañas ya abiertas: el service worker les avisa que pidan la configuración de nuevo.
+
 ## Permisos
 
 | Permiso | Para qué |
@@ -202,6 +229,7 @@ No se usa `tabs`, `declarativeNetRequestFeedback`, `scripting` ni `<all_urls>`.
 ## Seguridad de la propia extensión
 
 - **CSP de páginas propias:** `script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; connect-src 'self' https:`. No hay `eval`, código remoto ni HTML dinámico (solo `textContent`).
+- **Almacenamiento cerrado a los content scripts:** desde la fase 6, `chrome.storage.local` (ajustes, registro, API key) es `TRUSTED_CONTEXTS`. Los content scripts reciben solo un subconjunto mínimo por mensaje (`cs:config`): nivel, interruptores y lista de direcciones. Nunca reciben la API key ni el historial. Además, ya no despiertan al service worker en cada carga de página.
 - **Mensajes validados:** los mensajes privilegiados (como "continuar al sitio bloqueado") solo se aceptan de páginas de la propia extensión, nunca de content scripts ni de otras extensiones. Además, el dominio a permitir tiene que ser exactamente el que se bloqueó en esa pestaña.
 - **"Continuar de todos modos":** exige marcar una casilla y un clic real (`isTrusted`). Solo dura hasta cerrar el navegador (reglas de sesión).
 - **La página de bloqueo no funciona dentro de un iframe** (anti-clickjacking, verificado en el test e2e).
@@ -216,9 +244,8 @@ No se usa `tabs`, `declarativeNetRequestFeedback`, `scripting` ni `<all_urls>`.
 - **Orden de carga entre extensiones:** Chrome no garantiza qué extensión inyecta primero. Si una wallet fija `window.ethereum` como no configurable y no escribible *antes* que WalletShield, ese objeto no se puede envolver. Los providers EIP-6963 y los definidos después sí quedan protegidos (verificado en el e2e).
 - **Falla cerrada:** si el análisis no responde en 2,5 s, la solicitud se bloquea.
 - **Consultas on-chain:** para saber si una dirección es contrato o cuenta personal, y para leer saldos y decimales, se consulta el RPC que ya usa tu wallet (solo lectura). No se contacta a terceros.
-- **"Contrato recién desplegado o sin verificar":** necesita un explorador (Etherscan) o un simulador (Tenderly) con tu API key. Llegará como opción en la fase 6, desactivada por defecto. Mientras tanto, cualquier contrato desconocido recibe una advertencia.
+- **"Contrato recién desplegado o sin verificar":** no se detecta sin un explorador. La simulación opcional con Tenderly (fase 6) muestra qué movería la transacción, pero no la antigüedad del contrato. Cualquier contrato desconocido recibe una advertencia.
 - **Direcciones de drainers:** el `address.json` de ScamSniffer no se actualiza desde 2024. Es una capa extra; la detección principal analiza qué se firma.
-- **Acceso a `chrome.storage.local`:** los content scripts leen los ajustes y la lista de direcciones desde ahí. La página no puede acceder (mundo aislado).
 
 ### Solana (fase 5)
 
@@ -279,6 +306,12 @@ El test de Solana usa un Phantom simulado con transacciones reales construidas c
 
 ```bash
 npm run e2e:solana
+```
+
+El test de la interfaz cubre popup, opciones, exportar/importar, simulación con un Tenderly simulado y que los cambios se apliquen en pestañas abiertas:
+
+```bash
+npm run e2e:ui
 ```
 
 Con `WS_SS_REAL=1` y `ss_domains.json` en la misma carpeta, el test usa la lista real completa de ScamSniffer (365.000 dominios, prueba de escala).

@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opciones de WalletShield</title>
+  <link rel="stylesheet" href="../ui/base.css">
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+<main>
+  <header class="row">
+    <img src="../icons/icon-48.png" width="40" height="40" alt="">
+    <div><h1>WalletShield</h1><div class="muted small">Todo se analiza en tu navegador. Sin telemetría.</div></div>
+  </header>
+
+  <section class="card">
+    <h2>Nivel de protección</h2>
+    <div class="levels" role="radiogroup" aria-label="Nivel de protección">
+      <label class="level"><input type="radio" name="level" value="relaxed"><span><b>Relajado</b><br><span class="muted small">Solo frena lo de riesgo alto. Menos interrupciones.</span></span></label>
+      <label class="level"><input type="radio" name="level" value="normal"><span><b>Normal</b> (recomendado)<br><span class="muted small">Pregunta ante riesgo medio y alto.</span></span></label>
+      <label class="level"><input type="radio" name="level" value="strict"><span><b>Estricto</b><br><span class="muted small">Pregunta también ante riesgo bajo, avisa por imitaciones dudosas y bloquea sin opción las firmas ciegas y los cambios de dueño.</span></span></label>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Protecciones</h2>
+    <label class="switch"><span>Firewall de wallets<br><span class="muted small">Analiza firmas y transacciones antes de que lleguen a MetaMask, Rabby o Phantom.</span></span><input type="checkbox" id="firewall"></label>
+    <label class="switch"><span>Protección del portapapeles<br><span class="muted small">Detecta direcciones reemplazadas al copiar o pegar.</span></span><input type="checkbox" id="clipboard"></label>
+    <label class="switch"><span>Consultar la antigüedad de dominios sospechosos (RDAP)<br><span class="muted small">Privacidad: envía el nombre del dominio sospechoso a rdap.org. Desactivado por defecto.</span></span><input type="checkbox" id="rdap"></label>
+  </section>
+
+  <section class="card">
+    <div class="row between"><h2>Listas de phishing</h2><button id="sync" type="button">Actualizar ahora</button></div>
+    <p class="muted small">Se actualizan solas cada 6 horas. Solo se descargan las listas: no se envía ningún dato tuyo.</p>
+    <ul class="list" id="sources"></ul>
+    <div id="syncMsg" class="small muted" role="status"></div>
+  </section>
+
+  <section class="card">
+    <h2>Sitios de confianza</h2>
+    <p class="muted small">No muestran avisos de dominio. El firewall igual revisa sus firmas (un sitio legítimo puede ser hackeado).</p>
+    <form id="addForm" class="row"><input type="text" id="addHost" placeholder="ej. app.uniswap.org" aria-label="Dominio" autocomplete="off"><button class="primary" type="submit">Agregar</button></form>
+    <div id="addMsg" class="small" role="status"></div>
+    <ul class="list" id="allow"></ul>
+  </section>
+
+  <section class="card">
+    <h2>Simulación de transacciones (Tenderly)</h2>
+    <p class="muted small">Opcional y desactivada por defecto. Si la activas, las transacciones que muestran el aviso se envían a api.tenderly.co para simularlas con <b>tu</b> cuenta. El resultado se muestra en el aviso como información. La API key se guarda solo en este navegador, nunca se exporta y las páginas web no pueden leerla.</p>
+    <div class="grid">
+      <label>Cuenta (account slug)<input type="text" id="simAccount" autocomplete="off"></label>
+      <label>Proyecto (project slug)<input type="text" id="simProject" autocomplete="off"></label>
+      <label>API key<input type="password" id="simKey" autocomplete="off" placeholder="sin cambios"></label>
+    </div>
+    <label class="switch"><span>Activar simulación</span><input type="checkbox" id="simEnabled"></label>
+    <div class="row"><button id="simSave" class="primary" type="button">Guardar</button><button id="simClear" class="danger" type="button">Borrar API key</button><span id="simMsg" class="small muted" role="status"></span></div>
+  </section>
+
+  <section class="card">
+    <h2>Exportar / importar configuración</h2>
+    <p class="muted small">El archivo incluye nivel, protecciones, listas y sitios de confianza. No incluye la API key ni el registro.</p>
+    <div class="row"><button id="export" type="button">Exportar</button><label class="btn">Importar…<input type="file" id="import" accept="application/json,.json" hidden></label><span id="ioMsg" class="small" role="status"></span></div>
+  </section>
+
+  <section class="card">
+    <div class="row between"><h2>Registro de eventos</h2><div class="row"><select id="filter" aria-label="Filtrar"><option value="">Todos</option><option value="block">Bloqueos</option><option value="threat">Amenazas</option><option value="lists">Listas</option><option value="error">Errores</option></select><button id="clearLog" class="danger" type="button">Borrar</button></div></div>
+    <p class="muted small" id="statsLine"></p>
+    <div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Evento</th><th>Sitio</th><th>Detalle</th></tr></thead><tbody id="log"></tbody></table></div>
+  </section>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

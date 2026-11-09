@@ -182,7 +182,11 @@ try {
   await p2.waitForTimeout(200);
   pending = p2.evaluate(() => window.__req('window', 'eth_sign', ['0x1111111111111111111111111111111111111111', '0x' + 'cd'.repeat(32)]));
   const strictModal = await waitModal(p2);
-  await p2.keyboard.press('Enter'); // único botón: "Cerrar"
+  // En bloqueo duro no hay botón "Continuar": ni con Tab se llega a uno.
+  await p2.keyboard.press('Tab');
+  await p2.keyboard.press('Tab');
+  await p2.keyboard.press('Tab');
+  await p2.keyboard.press('Escape');
   r = await pending;
   check('modo estricto: eth_sign bloqueado sin opción de continuar', strictModal && !r.ok && !(await p2.evaluate(() => window.__walletCalls.includes('eth_sign'))));
 

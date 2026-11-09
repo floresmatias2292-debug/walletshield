@@ -20,10 +20,12 @@ const common = {
 
 await build({ ...common, entryPoints: ['background/index.ts'], outfile: `${OUT}/background/index.js`, format: 'esm' });
 await build({ ...common, entryPoints: ['blocked/blocked.ts'], outfile: `${OUT}/blocked/blocked.js`, format: 'iife' });
+await build({ ...common, entryPoints: ['popup/popup.ts'], outfile: `${OUT}/popup/popup.js`, format: 'iife' });
+await build({ ...common, entryPoints: ['options/options.ts'], outfile: `${OUT}/options/options.js`, format: 'iife' });
 await build({ ...common, entryPoints: ['content/main/index.ts'], outfile: `${OUT}/content/main.js`, format: 'iife' });
 await build({ ...common, entryPoints: ['content/isolated/index.ts'], outfile: `${OUT}/content/isolated.js`, format: 'iife' });
 
-for (const f of ['manifest.json', 'blocked/blocked.html', 'blocked/blocked.css']) {
+for (const f of ['manifest.json', 'blocked/blocked.html', 'blocked/blocked.css', 'popup/popup.html', 'popup/popup.css', 'options/options.html', 'options/options.css', 'ui/base.css']) {
   mkdirSync(join(OUT, f, '..'), { recursive: true });
   cpSync(f, join(OUT, f));
 }
@@ -31,7 +33,7 @@ cpSync('rules/static', `${OUT}/rules/static`, { recursive: true });
 // Las listas empaquetadas se redistribuyen: se incluyen sus licencias.
 cpSync('LICENSES', `${OUT}/LICENSES`, { recursive: true });
 cpSync('LICENSE', `${OUT}/LICENSE`);
-if (existsSync('icons')) cpSync('icons', `${OUT}/icons`, { recursive: true });
+cpSync('icons', `${OUT}/icons`, { recursive: true, filter: (src) => !src.endsWith('.svg') });
 
 function sizes(dir, acc = []) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
