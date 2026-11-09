@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "WalletShield",
+  "version": "0.2.0",
+  "description": "Protección contra phishing y drainers para wallets cripto. Analiza localmente, sin telemetría.",
+  "minimum_chrome_version": "121",
+  "background": {
+    "service_worker": "background/index.js",
+    "type": "module"
+  },
+  "permissions": ["declarativeNetRequest", "webNavigation", "storage", "alarms"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "static_metamask", "enabled": true, "path": "rules/static/static_metamask.json" },
+      { "id": "static_polkadot", "enabled": true, "path": "rules/static/static_polkadot.json" }
+    ]
+  },
+  "action": {
+    "default_title": "WalletShield"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["blocked/blocked.html"],
+      "matches": ["http://*/*", "https://*/*"],
+      "use_dynamic_url": false
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; connect-src 'self' https:"
+  }
+}

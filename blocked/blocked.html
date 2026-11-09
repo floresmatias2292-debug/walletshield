@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sitio bloqueado · WalletShield</title>
+  <link rel="stylesheet" href="blocked.css">
+</head>
+<body>
+  <main id="app" hidden>
+    <div class="badge" id="risk">Riesgo alto</div>
+    <h1 id="title">Este sitio fue bloqueado</h1>
+    <p class="host" id="host"></p>
+    <p id="summary"></p>
+    <ul id="reasons"></ul>
+    <div class="actions">
+      <button id="back" class="primary" type="button">Volver a un lugar seguro</button>
+    </div>
+    <details>
+      <summary>Continuar de todos modos (no recomendado)</summary>
+      <label><input type="checkbox" id="ack"> Entiendo que este sitio puede robar mis fondos.</label>
+      <button id="proceed" type="button" disabled>Continuar solo por esta sesión</button>
+    </details>
+    <footer>WalletShield · la decisión de continuar se recuerda hasta cerrar el navegador.</footer>
+  </main>
+  <script src="blocked.js"></script>
+</body>
+</html>

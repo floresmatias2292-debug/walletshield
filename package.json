@@ -1,0 +1,24 @@
+{
+  "name": "walletshield",
+  "version": "0.2.0",
+  "description": "Extensión de Chrome anti-phishing y firewall de wallets",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --dev",
+    "build:rules": "esbuild scripts/build-rules.ts --bundle --platform=node --format=esm --outfile=.cache/build-rules.mjs --log-level=warning && node .cache/build-rules.mjs",
+    "eval:heuristics": "esbuild scripts/eval-heuristics.ts --bundle --platform=node --format=esm --outfile=.cache/eval.mjs --log-level=warning && node .cache/eval.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "e2e": "npm run build && node tests/e2e/run.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/chrome": "^0.3.7",
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.1.0"
+  },
+  "private": true,
+  "type": "module"
+}
