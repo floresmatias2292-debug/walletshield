@@ -2,7 +2,7 @@
  * Sincroniza las listas descargadas con las reglas declarativeNetRequest.
  * Solo corre por alarma (cada 6 h), al instalar o al cambiar ajustes.
  */
-import { conditionalFetchJson } from './fetcher';
+import { conditionalFetchJson, type FetchMeta } from './fetcher';
 import { PARSERS } from './parsers';
 import { sanitizeAll, sanitizePaths, upstreamAllowDomains, type AllowLists } from './sanitize';
 import {
@@ -250,6 +250,25 @@ async function incrementalSync(src: SourceDef): Promise<number> {
   return clean.length;
 }
 
+/**
+ * Direcciones de drainers conocidas (ScamSniffer address.json, GPL-3.0,
+ * descargada, no empaquetada). Su repo indica que ya no se actualiza desde
+ * feb-2024: sirve como base histórica, no como única defensa.
+ */
+const BAD_ADDRESSES_URL = 'https://raw.githubusercontent.com/scamsniffer/scam-database/main/blacklist/address.json';
+
+async function syncBadAddresses(): Promise<string> {
+  const { badAddressesMeta } = await chrome.storage.local.get('badAddressesMeta');
+  const res = await conditionalFetchJson(BAD_ADDRESSES_URL, badAddressesMeta as FetchMeta | undefined);
+  if (res.status !== 'ok') return res.status;
+  const list = Array.isArray(res.json)
+    ? [...new Set(res.json.filter((a): a is string => typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a)).map((a) => a.toLowerCase()))]
+    : [];
+  if (list.length > 200_000) throw new Error('lista de direcciones demasiado grande');
+  await chrome.storage.local.set({ badAddresses: list, badAddressesMeta: res.meta });
+  return String(list.length);
+}
+
 export interface SyncReport {
   readonly source: SourceId;
   readonly result: string;
@@ -280,6 +299,13 @@ export function syncAll(opts: { force?: boolean } = {}): Promise<SyncReport[]> {
         await setSourceState(id, { ...state, error: msg });
         await logEvent({ kind: 'error', detail: `${id}: ${msg}` });
         reports.push({ source: id, result: `error: ${msg}` });
+      }
+    }
+    if (settings.sources.scamsniffer) {
+      try {
+        reports.push({ source: 'scamsniffer', result: `direcciones=${await syncBadAddresses()}` });
+      } catch (e) {
+        reports.push({ source: 'scamsniffer', result: `direcciones error: ${e instanceof Error ? e.message : String(e)}` });
       }
     }
     await logEvent({ kind: 'lists-updated', detail: reports.map((r) => `${r.source}=${r.result}`).join(' ') });

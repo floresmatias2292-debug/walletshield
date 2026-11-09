@@ -8,7 +8,7 @@
 import { syncAll, writeUpstreamAllowRule, writeUserAllowRule, addSessionAllow } from './lists/dnr-sync';
 import { allowForSession, blockedContextFor, forgetTab, onBeforeNavigate } from './navigation-guard';
 import { bumpBlocked, getSettings, logEvent } from './state';
-import { isExtensionPageSender, parsePrivilegedRequest } from '../shared/messages';
+import { isExtensionPageSender, parseFirewallEvent, parsePrivilegedRequest } from '../shared/messages';
 
 const ALARM = 'lists-update';
 const PERIOD_MIN = 6 * 60;
@@ -58,6 +58,25 @@ chrome.storage.onChanged.addListener((changes, area) => {
   const after = changes.settings.newValue as { sources?: unknown; allowlist?: unknown } | undefined;
   if (JSON.stringify(before?.allowlist) !== JSON.stringify(after?.allowlist)) void writeUserAllowRule();
   if (JSON.stringify(before?.sources) !== JSON.stringify(after?.sources)) void syncAll();
+});
+
+// Mensajes de content scripts (no confiables): solo eventos del firewall,
+// validados y con límite de frecuencia por pestaña.
+const fwRate = new Map<number, { t: number; n: number }>();
+chrome.runtime.onMessage.addListener((raw: unknown, sender) => {
+  if (sender.id !== chrome.runtime.id || !sender.tab?.id || isExtensionPageSender(sender, chrome.runtime.id)) return false;
+  const ev = parseFirewallEvent(raw);
+  if (!ev) return false;
+  const now = Date.now();
+  const r = fwRate.get(sender.tab.id);
+  if (r && now - r.t < 60_000) {
+    if (++r.n > 30) return false;
+  } else fwRate.set(sender.tab.id, { t: now, n: 1 });
+  void (async () => {
+    if (ev.kind !== 'fw-allow') await bumpBlocked();
+    await logEvent({ kind: ev.kind, host: ev.host, detail: `${ev.method} · ${ev.risk} · ${ev.codes.join(',')}` });
+  })();
+  return false;
 });
 
 chrome.runtime.onMessage.addListener((raw: unknown, sender, sendResponse) => {

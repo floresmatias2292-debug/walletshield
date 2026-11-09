@@ -50,3 +50,33 @@ export function isExtensionPageSender(sender: chrome.runtime.MessageSender, exte
   if (sender.origin !== undefined) return sender.origin === origin;
   return typeof sender.url === 'string' && sender.url.startsWith(`${origin}/`);
 }
+
+/** Único mensaje que aceptan los content scripts: reportar una decisión del firewall. */
+export interface FirewallEvent {
+  readonly type: 'fw:event';
+  readonly kind: 'fw-block' | 'fw-allow' | 'fw-auto-block';
+  readonly method: string;
+  readonly risk: RiskLevel;
+  readonly host: string;
+  readonly codes: readonly string[];
+}
+
+const FW_KINDS = new Set(['fw-block', 'fw-allow', 'fw-auto-block']);
+const RISKS = new Set(['none', 'low', 'medium', 'high']);
+
+export function parseFirewallEvent(msg: unknown): FirewallEvent | null {
+  if (!isObj(msg) || msg.type !== 'fw:event') return null;
+  if (typeof msg.kind !== 'string' || !FW_KINDS.has(msg.kind)) return null;
+  if (typeof msg.method !== 'string' || msg.method.length > 64) return null;
+  if (typeof msg.risk !== 'string' || !RISKS.has(msg.risk)) return null;
+  if (typeof msg.host !== 'string' || msg.host.length > HOST_MAX) return null;
+  if (!Array.isArray(msg.codes) || msg.codes.length > 8 || !msg.codes.every((c) => typeof c === 'string' && c.length <= 32)) return null;
+  return {
+    type: 'fw:event',
+    kind: msg.kind as FirewallEvent['kind'],
+    method: msg.method,
+    risk: msg.risk as RiskLevel,
+    host: msg.host,
+    codes: msg.codes as string[],
+  };
+}

@@ -20,6 +20,8 @@ const common = {
 
 await build({ ...common, entryPoints: ['background/index.ts'], outfile: `${OUT}/background/index.js`, format: 'esm' });
 await build({ ...common, entryPoints: ['blocked/blocked.ts'], outfile: `${OUT}/blocked/blocked.js`, format: 'iife' });
+await build({ ...common, entryPoints: ['content/main/index.ts'], outfile: `${OUT}/content/main.js`, format: 'iife' });
+await build({ ...common, entryPoints: ['content/isolated/index.ts'], outfile: `${OUT}/content/isolated.js`, format: 'iife' });
 
 for (const f of ['manifest.json', 'blocked/blocked.html', 'blocked/blocked.css']) {
   mkdirSync(join(OUT, f, '..'), { recursive: true });

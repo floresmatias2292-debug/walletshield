@@ -1,0 +1,12 @@
+<!doctype html><meta charset="utf-8"><title>dapp</title>
+<script>
+  // Ataque: la página intenta hacerse pasar por el script MAIN de WalletShield.
+  window.__fakeGot = 0;
+  const ch = new MessageChannel();
+  ch.port1.onmessage = () => { window.__fakeGot++; };
+  window.postMessage({ '__walletshield_port_v1__': true }, '*', [ch.port2]);
+</script>
+<script src="/wallet.js?mode=MODE"></script>
+<script src="/dapp.js"></script>
+<h1>dapp de prueba</h1>
+<iframe id="hidden" src="about:blank" width="1" height="1" style="opacity:0;border:0"></iframe>

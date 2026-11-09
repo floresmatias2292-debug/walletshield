@@ -11,6 +11,8 @@ export interface Settings {
   readonly allowlist: readonly string[];
   /** Consulta RDAP de fecha de registro (envía el dominio a rdap.org). Off por defecto. */
   readonly rdapLookup: boolean;
+  /** Firewall de wallets (análisis de firmas y transacciones). */
+  readonly firewall: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -19,6 +21,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sources: { metamask: true, polkadot: true, scamsniffer: true },
   allowlist: [],
   rdapLookup: false,
+  firewall: true,
 };
 
 const STRICTNESS: readonly Strictness[] = ['relaxed', 'normal', 'strict'];
@@ -59,5 +62,6 @@ export function parseSettings(input: unknown): Settings {
     sources,
     allowlist,
     rdapLookup: input.rdapLookup === true,
+    firewall: input.firewall !== false,
   };
 }
