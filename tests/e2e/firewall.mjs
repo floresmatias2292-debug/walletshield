@@ -55,7 +55,7 @@ const check = (name, ok, detail = '') => {
   console.log(`${ok ? '✔' : '✘'} ${name}${detail ? `  (${detail})` : ''}`);
 };
 
-const modalOpen = (page) => page.evaluate(() => [...document.documentElement.children].some((e) => (e.getAttribute('style') ?? '').includes('2147483647')));
+const modalOpen = (page) => page.evaluate(() => [...document.documentElement.children].some((e) => (e.getAttribute('style') ?? '').includes('inset: 0')));
 async function waitModal(page, ms = 4000) {
   const t0 = Date.now();
   while (Date.now() - t0 < ms) {

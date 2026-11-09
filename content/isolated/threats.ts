@@ -15,6 +15,7 @@ export const THREAT_TEXT: Record<ThreatKind | 'request-burst', { risk: RiskLevel
   'wallet-channel': { risk: 'high', text: 'intentó hablar directamente con tu wallet salteando los controles (bloqueado).' },
   'clipboard-write': { risk: 'high', text: 'intentó escribir una dirección en tu portapapeles sin que hicieras nada (bloqueado).' },
   'clipboard-copy-swap': { risk: 'high', text: 'cambió la dirección que copiaste por otra (se restauró la original).' },
+  'tx-changed': { risk: 'high', text: 'cambió una transacción después de que la aprobaras (bloqueada).' },
   'request-burst': { risk: 'high', text: 'insiste con solicitudes de firma peligrosas una y otra vez.' },
 };
 

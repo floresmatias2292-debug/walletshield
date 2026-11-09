@@ -36,6 +36,8 @@ await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: ORIG
 const results = [];
 const check = (name, ok, detail = '') => { results.push(ok); console.log(`${ok ? '✔' : '✘'} ${name}${detail ? `  (${detail})` : ''}`); };
 const overlays = (page) => page.evaluate(() => [...document.documentElement.children].filter((e) => (e.getAttribute('style') ?? '').includes('2147483647')).length);
+// El modal (a diferencia de los avisos) ocupa toda la pantalla: "inset: 0".
+const modalOpen = (page) => page.evaluate(() => [...document.documentElement.children].some((e) => (e.getAttribute('style') ?? '').includes('inset: 0')));
 async function waitFor(fn, ms = 4000) { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 50)); } return false; }
 const textHex = '0x' + Buffer.from('Login en la tienda. Nonce 42').toString('hex');
 const USER = '0x1111111111111111111111111111111111111111';
@@ -54,14 +56,14 @@ try {
   // 0. Control: sin ataques, una firma de texto pasa sin modal.
   let page = await open('none');
   let r = await page.evaluate(([m, u]) => window.__req('window', 'personal_sign', [m, u]), [textHex, USER]);
-  check('control: página limpia, firma de texto pasa sin modal', r.ok && (await overlays(page)) === 0);
+  check('control: página limpia, firma de texto pasa sin modal', r.ok && !(await modalOpen(page)));
 
   // 1. Script de la página reemplaza window.ethereum.
   page = await open('overwrite');
   await page.waitForTimeout(300);
   check('reemplazo de window.ethereum por la página: aviso visible', (await overlays(page)) >= 1);
   let pending = page.evaluate(([m, u]) => window.__req('window', 'personal_sign', [m, u]), [textHex, USER]);
-  const modal1 = await waitFor(async () => (await overlays(page)) >= 2);
+  const modal1 = await waitFor(() => modalOpen(page));
   check('después del reemplazo, hasta una firma de texto pide confirmación (riesgo alto)', modal1);
   await page.keyboard.press('Escape');
   r = await pending;
@@ -80,7 +82,7 @@ try {
   await page.evaluate(() => window.ethereum.request({ method: 'eth_chainId' })); // usa el provider → escaneo diferido
   await page.waitForTimeout(800);
   pending = page.evaluate(([m, u]) => window.__req('window', 'personal_sign', [m, u]), [textHex, USER]);
-  check('kit de drainer (bot de Telegram + firmas): la firma inocua pasa a riesgo alto', await waitFor(async () => (await overlays(page)) >= 1));
+  check('kit de drainer (bot de Telegram + firmas): la firma inocua pasa a riesgo alto', await waitFor(() => modalOpen(page)));
   await page.keyboard.press('Enter');
   r = await pending;
   check('…y se bloquea', !r.ok);

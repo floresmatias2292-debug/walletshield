@@ -14,6 +14,7 @@ import { riskAtLeast, type RiskLevel } from '../../shared/risk';
 import { toBigInt } from '../../shared/evm/hex';
 import { resolveLookups, type Rpc } from './lookups';
 import { askUser } from './modal';
+import { analyzeSolanaRequest } from '../../shared/solana/analyzer';
 import { addThreat, noteRiskyRequest, pageThreats, THREAT_TEXT, type PageThreat } from './threats';
 import { scanScripts, scheduleScan } from './script-scan';
 import { installClipboardGuard } from './clipboard';
@@ -148,13 +149,13 @@ async function onMain(raw: unknown): Promise<void> {
   }
   port?.postMessage({ t: 'ack', id: msg.id });
   try {
-    decide(msg.id, await evaluate(msg.id, msg.method, msg.params, msg.frame));
+    decide(msg.id, await evaluate(msg.id, msg.method, msg.params, msg.frame, msg.ns));
   } catch {
     decide(msg.id, false); // ante cualquier error: falla cerrado
   }
 }
 
-async function evaluate(id: number, method: string, params: unknown[], frame: FrameInfo): Promise<boolean> {
+async function evaluate(id: number, method: string, params: unknown[], frame: FrameInfo, ns: 'evm' | 'solana'): Promise<boolean> {
   const s = await getSettings();
   if (!s.firewall) return true;
   const host = hostnameFromUrl(location.href) ?? location.hostname;
@@ -173,6 +174,8 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
     toast('Firma bloqueada', 'Un marco invisible de esta página pidió una firma a tu wallet. Se bloqueó automáticamente.');
     return false;
   }
+
+  if (ns === 'solana') return evaluateSolana(method, params, host, s);
 
   if (params.length === 1 && (params[0] as Record<string, unknown> | null)?.__walletshield_unreadable__) {
     const a = analyzeRequest(method, [null], baseInput(host, null, null, new Set()));
@@ -204,6 +207,25 @@ async function evaluate(id: number, method: string, params: unknown[], frame: Fr
     return true;
   }
   // Una página que insiste con solicitudes peligrosas se marca como maliciosa.
+  if (analysis.risk === 'high' && noteRiskyRequest()) {
+    const def = THREAT_TEXT['request-burst'];
+    recordThreat({ id: 'request-burst', risk: def.risk, text: def.text }, false);
+  }
+  const hardBlock = s.strictness === 'strict' && analysis.hardBlockInStrict;
+  const allow = await askUser({ analysis, host, hardBlock, technical: technicalDump(method, params) });
+  report(allow ? 'fw-allow' : hardBlock ? 'fw-auto-block' : 'fw-block', analysis, host);
+  return allow && !hardBlock;
+}
+
+/** Solana: el análisis es 100 % local (no hace falta consultar la red). */
+async function evaluateSolana(method: string, params: unknown[], host: string, s: Settings): Promise<boolean> {
+  void maybeScan();
+  const hits = await Promise.race([scanScripts(), new Promise<null>((r) => setTimeout(() => r(null), 400))]);
+  for (const h of hits ?? []) recordThreat({ id: `script:${h.id}`, risk: h.risk, text: `contiene código sospechoso: ${h.text}` }, false);
+  const unreadable = (params[0] as Record<string, unknown> | null)?.__walletshield_unreadable__ === true;
+  let analysis = analyzeSolanaRequest(method, unreadable ? [{}] : params, { pageHost: host, siteRisk: siteRisk(host), pageThreats: pageThreats() });
+  if (unreadable) analysis = { ...analysis, risk: 'high', title: 'Transacción de Solana que no se pudo leer' };
+  if (analysis.risk === 'none' || !riskAtLeast(analysis.risk, modalThreshold(s.strictness))) return true;
   if (analysis.risk === 'high' && noteRiskyRequest()) {
     const def = THREAT_TEXT['request-burst'];
     recordThreat({ id: 'request-burst', risk: def.risk, text: def.text }, false);

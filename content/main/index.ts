@@ -293,17 +293,20 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
     return proxy as T;
   }
 
+  /** Eventos que despachamos nosotros (para no re-interceptarlos). */
+  const ours = new WeakSetC<Event>();
+
   // ── window.ethereum: interceptar asignaciones y defineProperty ───────────
   type Source = { kind: 'value'; v: unknown } | { kind: 'accessor'; get?: () => unknown; set?: (v: unknown) => void };
 
-  function guardGlobal(key: string, ns: 'evm' | 'solana'): void {
+  function guardGlobal(key: string, wrap: (v: unknown) => unknown): void {
     const existing = getOwnPropertyDescriptor(W, key);
     if (existing && !existing.configurable) {
       // La wallet fijó la propiedad como no configurable: solo podemos
       // reemplazar el valor si es escribible.
       if ('value' in existing && existing.writable && existing.value) {
         try {
-          (W as unknown as Record<string, unknown>)[key] = wrapProvider(existing.value, ns);
+          (W as unknown as Record<string, unknown>)[key] = wrap(existing.value);
         } catch {
           /* sin protección para esta propiedad: limitación documentada */
         }
@@ -323,7 +326,7 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
       get() {
         const v = read();
         if (v) markUsed();
-        return wrapProvider(v, ns);
+        return wrap(v);
       },
       set(v: unknown) {
         checkOverwrite(key, read(), v);
@@ -378,10 +381,282 @@ import { READONLY_CALL_SELECTORS } from '../../shared/evm/selectors';
     return definePropertiesNative(target, props) as T;
   };
 
-  guardGlobal('ethereum', 'evm');
+  guardGlobal('ethereum', (v) => wrapProvider(v, 'evm'));
+
+  // ── Solana ────────────────────────────────────────────────────────────────
+  const nativeBtoa = W.btoa.bind(W);
+  const Uint8ArrayC = Uint8Array;
+  const isBytes = (v: unknown): v is Uint8Array => v instanceof Uint8ArrayC;
+
+  function toB64(u: Uint8Array): string {
+    let s = '';
+    for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000));
+    return nativeBtoa(s);
+  }
+
+  type Enc = { b64: string; wire: boolean };
+  /** Bytes de una transacción (Uint8Array o objeto de @solana/web3.js). */
+  function encodeTx(tx: unknown): Enc | null {
+    try {
+      if (isBytes(tx)) return { b64: toB64(tx), wire: true };
+      const t = tx as { serializeMessage?: () => Uint8Array; message?: { serialize?: () => Uint8Array }; serialize?: (o?: unknown) => Uint8Array };
+      if (typeof t?.serializeMessage === 'function') return { b64: toB64(t.serializeMessage()), wire: false };
+      if (typeof t?.message?.serialize === 'function') return { b64: toB64(t.message.serialize()), wire: false };
+      if (typeof t?.serialize === 'function') return { b64: toB64(t.serialize({ requireAllSignatures: false, verifySignatures: false })), wire: true };
+    } catch {
+      /* ilegible */
+    }
+    return null;
+  }
+
+  const UNREADABLE = [{ __walletshield_unreadable__: true }];
+
+  /**
+   * Pide decisión y, si se aprueba, verifica que el contenido no haya
+   * cambiado mientras el modal estaba abierto (ataque TOCTOU).
+   */
+  async function guardSol(target: object, method: string, encode: () => unknown | null): Promise<boolean> {
+    const before = encode();
+    const ok = await askIsolated(target, method, before === null ? UNREADABLE : [before], 'solana');
+    if (!ok) return false;
+    const after = encode();
+    if (JSON.stringify(after) === JSON.stringify(before)) return true;
+    threat('tx-changed', `${method}: el contenido cambió después del análisis`);
+    return false;
+  }
+
+  const encTxs = (list: unknown[]) => () => {
+    const txs = list.map(encodeTx);
+    return txs.some((x) => x === null) ? null : { txs };
+  };
+  const encMsg = (m: unknown) => () => (isBytes(m) ? { message: { b64: toB64(m), wire: false } } : typeof m === 'string' ? { message: { b64: toB64(new TextEncoder().encode(m)), wire: false } } : null);
+
+  const solProxies = new WeakMapC<object, object>();
+  const solWrapped = new WeakSetC<object>();
+
+  /** Envuelve un objeto con un Proxy cuyo `get` puede interceptar métodos. */
+  function shellProxy(obj: object, onFn: (prop: PropertyKey, fn: (...a: unknown[]) => unknown, self: object) => unknown, onValue?: (prop: PropertyKey, v: unknown) => unknown): object {
+    const shell = objectCreate(obj) as object;
+    let proxy: object;
+    const cache = new MapC<PropertyKey, { orig: unknown; w: unknown }>();
+    proxy = new ProxyC(shell, {
+      get(_t, prop) {
+        const v = reflectGet(obj, prop, obj) as unknown;
+        if (typeof v === 'function') {
+          const hit = cache.get(prop);
+          if (hit && hit.orig === v) return hit.w;
+          const w = onFn(prop, v as (...a: unknown[]) => unknown, proxy);
+          cache.set(prop, { orig: v, w });
+          return w;
+        }
+        if (v === obj) return proxy;
+        return onValue ? onValue(prop, v) : v;
+      },
+      set(_t, prop, value) {
+        return reflectSet(obj, prop, value, obj);
+      },
+      has(_t, prop) {
+        return prop in obj;
+      },
+      getOwnPropertyDescriptor(_t, prop) {
+        const d = getOwnPropertyDescriptor(obj, prop);
+        return d ? { ...d, configurable: true } : undefined;
+      },
+    });
+    return proxy;
+  }
+
+  const BLOCKED_SOL = 'WalletShield bloqueó esta solicitud.';
+
+  /** Provider legacy de Solana (window.solana, window.phantom.solana, window.solflare). */
+  function wrapSolana(p: unknown): unknown {
+    if (typeof p !== 'object' || p === null || solWrapped.has(p)) return p;
+    const hit = solProxies.get(p);
+    if (hit) return hit;
+    const obj = p;
+    const proxy = shellProxy(obj, (prop, fn, self) => {
+      const call = (args: unknown[]) => {
+        const r = reflectApply(fn, obj, args) as unknown;
+        return r === obj ? self : r;
+      };
+      const guarded = (method: string, enc: () => unknown | null) =>
+        function (...args: unknown[]) {
+          return guardSol(self, method, enc).then((ok) => {
+            if (!ok) throw rpcError(BLOCKED_SOL);
+            return call(args);
+          });
+        };
+      switch (prop) {
+        case 'signTransaction':
+          return function (tx: unknown, ...rest: unknown[]) {
+            return guarded('solana:signTransaction', encTxs([tx]))(tx, ...rest);
+          };
+        case 'signAndSendTransaction':
+          return function (tx: unknown, ...rest: unknown[]) {
+            return guarded('solana:signAndSendTransaction', encTxs([tx]))(tx, ...rest);
+          };
+        case 'signAllTransactions':
+        case 'signAndSendAllTransactions':
+          return function (txs: unknown, ...rest: unknown[]) {
+            const list = isArray(txs) ? txs : [];
+            return guarded(prop === 'signAllTransactions' ? 'solana:signAllTransactions' : 'solana:signAndSendAllTransactions', encTxs(list))(txs, ...rest);
+          };
+        case 'signMessage':
+          return function (msg: unknown, ...rest: unknown[]) {
+            return guarded('solana:signMessage', encMsg(msg))(msg, ...rest);
+          };
+        case 'signIn':
+          return function (input: unknown, ...rest: unknown[]) {
+            const domain = (input as { domain?: unknown } | undefined)?.domain;
+            return guarded('solana:signIn', () => ({ signIn: { domain: typeof domain === 'string' ? domain : W.location.host } }))(input, ...rest);
+          };
+        case 'request':
+          return function (args: unknown) {
+            const a = (args ?? {}) as { method?: unknown; params?: { message?: unknown; messages?: unknown } };
+            const params = a.params ?? {};
+            let method: string | null = null;
+            let enc: (() => unknown | null) | null = null;
+            const b58 = (m: unknown) => (typeof m === 'string' ? { b58: m, wire: false } : null);
+            if (a.method === 'signTransaction' || a.method === 'signAndSendTransaction') {
+              method = `solana:${a.method}`;
+              enc = () => (b58(params.message) ? { txs: [b58(params.message)] } : null);
+            } else if (a.method === 'signAllTransactions' || a.method === 'signAndSendAllTransactions') {
+              method = `solana:${a.method}`;
+              const list = isArray(params.messages) ? params.messages : [];
+              enc = () => (list.every((m) => typeof m === 'string') ? { txs: list.map(b58) } : null);
+            } else if (a.method === 'signMessage') {
+              method = 'solana:signMessage';
+              enc = encMsg(params.message);
+            } else if (a.method === 'signIn') {
+              method = 'solana:signIn';
+              enc = () => ({ signIn: { domain: W.location.host } });
+            }
+            if (!method || !enc) return call([args]);
+            return guarded(method, enc)(args);
+          };
+        default:
+          return function (this: unknown, ...args: unknown[]) {
+            return call(args);
+          };
+      }
+    });
+    solWrapped.add(proxy);
+    solProxies.set(obj, proxy);
+    markUsed();
+    return proxy;
+  }
+
+  /** window.phantom = { solana, ethereum, … } */
+  function wrapPhantom(p: unknown): unknown {
+    if (typeof p !== 'object' || p === null) return p;
+    const hit = solProxies.get(p);
+    if (hit) return hit;
+    const proxy = shellProxy(
+      p,
+      (_prop, fn) => function (...args: unknown[]) { return reflectApply(fn, p, args); },
+      (prop, v) => (prop === 'solana' ? wrapSolana(v) : prop === 'ethereum' ? wrapProvider(v, 'evm') : v),
+    );
+    solProxies.set(p, proxy);
+    return proxy;
+  }
+
+  guardGlobal('solana', wrapSolana);
+  guardGlobal('solflare', wrapSolana);
+  guardGlobal('phantom', wrapPhantom);
+
+  // ── Wallet Standard (lo que usa @solana/wallet-adapter) ──────────────────
+  type StdInput = { transaction?: unknown; message?: unknown; domain?: unknown };
+  const STD_FEATURES: Record<string, string> = {
+    'solana:signTransaction': 'signTransaction',
+    'solana:signAndSendTransaction': 'signAndSendTransaction',
+    'solana:signMessage': 'signMessage',
+    'solana:signIn': 'signIn',
+  };
+
+  function wrapStdFeature(featureName: string, feature: unknown): unknown {
+    const methodName = STD_FEATURES[featureName];
+    if (!methodName || typeof feature !== 'object' || feature === null) return feature;
+    const obj = feature;
+    return shellProxy(obj, (prop, fn) => {
+      if (prop !== methodName) return function (...args: unknown[]) { return reflectApply(fn, obj, args); };
+      return function (...inputs: unknown[]) {
+        // Copias de los bytes: la página no puede cambiarlos después de analizados.
+        const copies = inputs.map((i) => {
+          const x = { ...(i as StdInput) } as StdInput;
+          if (isBytes(x.transaction)) x.transaction = new Uint8ArrayC(x.transaction);
+          if (isBytes(x.message)) x.message = new Uint8ArrayC(x.message);
+          return x;
+        });
+        let enc: () => unknown | null;
+        if (featureName === 'solana:signMessage') enc = encMsg(copies[0]?.message);
+        else if (featureName === 'solana:signIn') {
+          const d = copies[0]?.domain;
+          enc = () => ({ signIn: { domain: typeof d === 'string' ? d : W.location.host } });
+        } else enc = encTxs(copies.map((c) => c.transaction));
+        const method = featureName === 'solana:signTransaction' && copies.length > 1 ? 'solana:signAllTransactions' : featureName;
+        return guardSol(obj, method, enc).then((ok) => {
+          if (!ok) throw rpcError(BLOCKED_SOL);
+          return reflectApply(fn, obj, copies);
+        });
+      };
+    });
+  }
+
+  const stdWrapped = new WeakMapC<object, object>();
+  function wrapStdWallet(w: unknown): unknown {
+    if (typeof w !== 'object' || w === null) return w;
+    const hit = stdWrapped.get(w);
+    if (hit) return hit;
+    const proxy = shellProxy(
+      w,
+      (_prop, fn) => function (...args: unknown[]) { return reflectApply(fn, w, args); },
+      (prop, v) => {
+        if (prop !== 'features' || typeof v !== 'object' || v === null) return v;
+        const feats = v as Record<string, unknown>;
+        return shellProxy(feats, (_p, fn) => function (...a: unknown[]) { return reflectApply(fn, feats, a); }, (name, f) => (typeof name === 'string' ? wrapStdFeature(name, f) : f));
+      },
+    );
+    stdWrapped.set(w, proxy);
+    markUsed();
+    return proxy;
+  }
+
+  type RegisterApi = { register: (...wallets: unknown[]) => unknown };
+  const wrapApi = (api: RegisterApi): RegisterApi =>
+    freeze({ register: (...wallets: unknown[]) => reflectApply(api.register, api, wallets.map(wrapStdWallet)) as unknown });
+
+  // Billetera → app: 'wallet-standard:register-wallet' con un callback.
+  reflectApply(addEvent, W, [
+    'wallet-standard:register-wallet',
+    (ev: Event) => {
+      if (ours.has(ev)) return;
+      const cb = (ev as CustomEvent<unknown>).detail;
+      if (typeof cb !== 'function') return;
+      reflectApply(stopImmediate, ev, []);
+      const ne = new CustomEventC('wallet-standard:register-wallet', {
+        detail: (api: RegisterApi) => reflectApply(cb, undefined, [wrapApi(api)]),
+      });
+      ours.add(ne);
+      reflectApply(dispatch, W, [ne]);
+    },
+    true,
+  ]);
+  // App → billeteras: 'wallet-standard:app-ready' con la API de registro.
+  reflectApply(addEvent, W, [
+    'wallet-standard:app-ready',
+    (ev: Event) => {
+      if (ours.has(ev)) return;
+      const api = (ev as CustomEvent<RegisterApi>).detail;
+      if (!api || typeof api.register !== 'function') return;
+      reflectApply(stopImmediate, ev, []);
+      const ne = new CustomEventC('wallet-standard:app-ready', { detail: wrapApi(api) });
+      ours.add(ne);
+      reflectApply(dispatch, W, [ne]);
+    },
+    true,
+  ]);
 
   // ── EIP-6963: reemplazar el provider anunciado por uno envuelto ───────────
-  const ours = new WeakSetC<Event>();
   reflectApply(addEvent, W, [
     'eip6963:announceProvider',
     (ev: Event) => {

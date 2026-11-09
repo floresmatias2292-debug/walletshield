@@ -2,7 +2,7 @@
 
 Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigidos a wallets cripto (MetaMask, Rabby y, opcionalmente, Phantom). Todo el análisis es local: **cero telemetría**. Lo único que sale del navegador es la descarga de las listas públicas de phishing.
 
-> **Estado: fase 4 de 8.** Ya funcionan el bloqueo de phishing por dominio, la detección de imitaciones, el firewall de wallets EVM y la detección de scripts maliciosos y clipboard hijacking. Solana, el popup y opciones, y el monitor en la nube llegan en las próximas fases.
+> **Estado: fase 5 de 8.** Ya funcionan el bloqueo de phishing por dominio, la detección de imitaciones, el firewall de wallets EVM y Solana (Phantom y Wallet Standard) y la detección de scripts maliciosos y clipboard hijacking. El popup y opciones, el monitor en la nube y la auditoría final llegan en las próximas fases.
 
 | Fase | Contenido | Estado |
 |---|---|---|
@@ -10,7 +10,7 @@ Extensión de Chrome (Manifest V3) que protege contra phishing y drainers dirigi
 | 2 | Bloqueo por dominio (declarativeNetRequest) + heurísticas | ✅ |
 | 3 | Firewall de wallets EVM (proxy del provider, decodificador, modal) | ✅ |
 | 4 | Scripts maliciosos y clipboard hijacking | ✅ |
-| 5 | Solana / Phantom | ⏳ |
+| 5 | Solana / Phantom | ✅ |
 | 6 | Popup y página de opciones | ⏳ |
 | 7 | Monitor en la nube (Ethereum + Arbitrum) con alertas de Telegram | ⏳ |
 | 8 | Medición de rendimiento y auditoría de seguridad | ⏳ |
@@ -133,6 +133,42 @@ Página ──request()──► Proxy de WalletShield (world MAIN, document_sta
 - firma de bajo riesgo, de punta a punta: +0,4 ms (objetivo < 5 ms);
 - análisis puro: < 1 ms en promedio (test unitario con un Permit2 de 4 tokens).
 
+## Solana y Phantom (fase 5)
+
+![Modal ante un drainer de Solana](docs/modal-solana-drainer.png)
+
+**Qué se intercepta:**
+- la API legacy: `window.solana`, `window.phantom.solana`, `window.solflare` y `request()` de Phantom con base58;
+- **Wallet Standard**, el registro que usan `@solana/wallet-adapter` y la mayoría de las dapps modernas: `solana:signTransaction`, `solana:signAndSendTransaction`, `solana:signMessage` y `solana:signIn`;
+- el provider EVM de Phantom (`window.phantom.ethereum`), que pasa por el firewall EVM.
+
+**Cómo se analiza:** el parser propio (`shared/solana/parser.ts`) lee transacciones legacy y v0, con o sin firmas, y muestra las cuentas de Address Lookup Tables como `tabla#índice`. Es 100 % local: no consulta la red.
+
+| Detecta | Riesgo |
+|---|---|
+| `SetAuthority` de tipo AccountOwner o CloseAccount sobre tu cuenta de tokens (cambio de dueño) | Alto. En modo estricto, bloqueo sin opción de continuar |
+| `System Assign` sobre tu wallet ("owner change") | Alto. En modo estricto, bloqueo sin opción de continuar |
+| `Approve` con `u64::MAX` (delegación ilimitada) | Alto (limitada: medio) |
+| 3 o más tokens transferidos en una sola firma | Alto |
+| Cambio de autoridad de staking, de durable nonce o de upgrade de un programa | Alto |
+| `signMessage` cuyo "mensaje" es en realidad una transacción serializada | Alto |
+| Sign In With Solana para otro dominio | Alto |
+| Lotes de 5 o más transacciones | Medio |
+| `CloseAccount` que envía el depósito a otra dirección | Medio |
+| Programas desconocidos | Bajo (informativo) |
+
+**Sin falsos positivos en flujos comunes:** un swap estilo Jupiter (v0 con lookup tables, compute budget, creación de ATA), los envíos simples de SOL o tokens, cerrar cuentas vacías hacia ti mismo y el SIWS del propio sitio pasan sin modal.
+
+**Programas conocidos:**
+- System, SPL Token, Token‑2022, ATA, Compute Budget y Stake: verificados en los tests contra `@solana/web3.js` y `@solana/spl-token`.
+- Jupiter v6, Raydium (AMM v4, CLMM, CPMM), Orca Whirlpools y Meteora DLMM: copiados de los repos oficiales de cada proyecto.
+
+**Protección contra cambios del contenido (TOCTOU):**
+- los bytes que recibe la wallet por Wallet Standard son una copia de los analizados, así que la página no puede cambiarlos mientras el modal está abierto;
+- en la API legacy, la transacción se vuelve a serializar después de tu aprobación; si cambió, se bloquea y se avisa.
+
+**Latencia:** unos +1 ms en una `signTransaction` benigna, de punta a punta.
+
 ## Scripts maliciosos y portapapeles (fase 4)
 
 Todo corre dentro de la página, sin costo en sitios que no usan wallets.
@@ -184,6 +220,13 @@ No se usa `tabs`, `declarativeNetRequestFeedback`, `scripting` ni `<all_urls>`.
 - **Direcciones de drainers:** el `address.json` de ScamSniffer no se actualiza desde 2024. Es una capa extra; la detección principal analiza qué se firma.
 - **Acceso a `chrome.storage.local`:** los content scripts leen los ajustes y la lista de direcciones desde ahí. La página no puede acceder (mundo aislado).
 
+### Solana (fase 5)
+
+- **Sin consultas a la red:** no se resuelven las cuentas de Address Lookup Tables ni los decimales de tokens desconocidos. Los montos se muestran en "unidades mínimas" salvo en `TransferChecked`/`ApproveChecked`, y no se puede saber si un envío es "todo tu saldo".
+- **API legacy:** cuando la página pasa objetos de `@solana/web3.js`, WalletShield analiza lo que devuelve `serializeMessage()`. La re-verificación posterior a tu aprobación detecta un objeto que cambia, pero una wallet podría serializar ese objeto de otra forma. Wallet Standard (bytes directos) no tiene este problema.
+- **Programas desconocidos:** un programa malicioso puede hacer cualquier cosa con las cuentas que recibe. Por eso la regla de "3+ tokens" y la de cambio de dueño son las defensas principales, y no la lista de programas.
+- **Otras wallets:** se cubren Phantom, Solflare y cualquier wallet que use Wallet Standard. Wallets con APIs propias distintas no están cubiertas.
+
 ### Scripts y portapapeles (fase 4)
 
 - **No hay hashes verificados:** no encontramos una lista pública, mantenida y con licencia abierta de hashes de kits de drainers. El motor admite hashes, pero viene con la lista vacía; la detección se basa en indicadores de comportamiento, que un atacante puede ofuscar.
@@ -230,6 +273,12 @@ El test de la fase 4 simula ataques reales: reemplazo del provider, uso del cana
 
 ```bash
 npm run e2e:threats
+```
+
+El test de Solana usa un Phantom simulado con transacciones reales construidas con `@solana/web3.js`:
+
+```bash
+npm run e2e:solana
 ```
 
 Con `WS_SS_REAL=1` y `ss_domains.json` en la misma carpeta, el test usa la lista real completa de ScamSniffer (365.000 dominios, prueba de escala).

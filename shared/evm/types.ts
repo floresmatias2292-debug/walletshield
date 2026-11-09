@@ -7,7 +7,11 @@ export type FindingCode =
   | 'nft-listing' | 'nft-sale-zero' | 'bulk-orders' | 'blur-bulk'
   | 'native-drain' | 'value-to-contract' | 'drainer-function' | 'token-transfer' | 'nft-transfer'
   | 'eip7702' | 'batch-calls' | 'contract-creation' | 'chain-mismatch' | 'typed-data' | 'legacy-typed-data'
-  | 'suspicious-site' | 'malicious-script' | 'undecodable' | 'add-chain' | 'grant-permissions' | 'unknown-method';
+  | 'suspicious-site' | 'malicious-script' | 'undecodable' | 'add-chain' | 'grant-permissions' | 'unknown-method'
+  // Solana
+  | 'sol-owner-change' | 'sol-assign' | 'sol-approve' | 'sol-unlimited-approve' | 'sol-transfer' | 'sol-multi-drain'
+  | 'sol-close-account' | 'sol-stake-authority' | 'sol-upgrade-authority' | 'sol-nonce-authority' | 'sol-mint-authority'
+  | 'sol-unknown-program' | 'sol-lookup-tables' | 'sol-batch' | 'sol-message-tx' | 'sol-siws' | 'sol-siws-mismatch' | 'sol-text';
 
 export interface Finding {
   readonly code: FindingCode;

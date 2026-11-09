@@ -30,7 +30,7 @@ export interface FrameInfo {
 }
 
 /** Comportamientos sospechosos que el script MAIN observa en la página. */
-export const THREAT_KINDS = ['provider-overwrite', 'provider-tamper', 'wallet-channel', 'clipboard-write', 'clipboard-copy-swap'] as const;
+export const THREAT_KINDS = ['provider-overwrite', 'provider-tamper', 'wallet-channel', 'clipboard-write', 'clipboard-copy-swap', 'tx-changed'] as const;
 export type ThreatKind = (typeof THREAT_KINDS)[number];
 
 export type MainToIso =
